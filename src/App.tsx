@@ -1,12 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
   ArrowLeft,
   Award,
   Camera,
+  CloudCheck,
   Folder,
   HardDriveDownload,
   LayoutGrid,
-  Lock,
+  LogOut,
   Menu,
   Network,
   Paperclip,
@@ -37,11 +39,9 @@ import {
   INITIAL_HABITS,
   INITIAL_VAULT_ITEMS,
   INITIAL_WIDGETS,
-  SAMPLE_PDF_SPECS,
 } from '@/src/data/seedVault';
-import { generateSamplePdfBase64 } from '@/src/utils/pdfFactory';
 import {
-  loadVaultSnapshotFromIndexedDB,
+  clearLegacySeedFromIndexedDB,
   saveVaultSnapshotToIndexedDB,
 } from '@/src/utils/offlineDb';
 import {
@@ -53,12 +53,28 @@ import {
 } from '@/src/utils/bureauAudio';
 import { ITEM_TYPE_TYPOGRAPHY, SECTION_TYPOGRAPHY } from '@/src/utils/bureauTypography';
 import {
+  auth,
+  signInWithGoogleAccount,
+  signOutAccount,
+} from '@/src/firebase';
+import {
+  createCommentInCloud,
+  createVaultItemInCloud,
+  deleteVaultItemFromCloud,
+  ensureAndLoadUserVaultState,
+  saveUserVaultMetaToCloud,
+  subscribeUserVaultComments,
+  subscribeUserVaultItems,
+  updateVaultItemInCloud,
+} from '@/src/utils/cloudVaultSync';
+import {
   BaggageTag,
   BureauPocketWatch,
   DeskBackgroundDecor,
   EmptyAshtrayState,
   EvidenceThumbnailIcon,
   MetalToggleSwitch,
+  RevolverSpinner,
   RollingDateStamp,
   RubberStampButton,
   TopSecretLoginGate,
@@ -103,7 +119,12 @@ const TYPE_LABEL: Record<VaultItemType, string> = {
   model_3d: 'Mô hình Pháp y 3D',
 };
 
-const FOLDER_TABS: Array<{ id: NavSection; num: string; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+const FOLDER_TABS: Array<{
+  id: NavSection;
+  num: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
   { id: 'dashboard', num: '01', label: 'Bảng Tin', icon: LayoutGrid },
   { id: 'library', num: '02', label: 'Kho Hồ Sơ', icon: Folder },
   { id: 'graph', num: '03', label: 'Dây Đỏ', icon: Network },
@@ -113,10 +134,14 @@ const FOLDER_TABS: Array<{ id: NavSection; num: string; label: string; icon: Rea
 ];
 
 export default function App() {
-  // #56: Closed "TOP SECRET" Dossier Gate on entry
-  const [dossierGateOpen, setDossierGateOpen] = useState(false);
+  // Authentication & Cloud Hydration State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [cloudHydrated, setCloudHydrated] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  // #28: Darkroom Red Safelight Mode
+  // Darkroom Red Safelight Mode
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [navSection, setNavSection] = useState<NavSection>('dashboard');
@@ -124,19 +149,18 @@ export default function App() {
   const [activeFolder, setActiveFolder] = useState<string>('Tất cả');
   const [typeFilter, setTypeFilter] = useState<'all' | VaultItemType>('all');
 
-  // #42 Binder Clip Priority Filter & #34 Date Stamp Filter & #23 Polaroid Scattered Gallery Mode
+  // Binder Clip Priority Filter, Date Stamp Filter & Polaroid Gallery Mode
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'pinned' | 'standard'>('all');
   const [dateFilter, setDateFilter] = useState<string>('');
   const [polaroidMode, setPolaroidMode] = useState<boolean>(false);
   const [crumplingId, setCrumplingId] = useState<string | null>(null);
 
-  // #43 Camera Flash Transition & #50 Shake State
+  // Camera Flash Transition & Shake State
   const [cameraFlashing, setCameraFlashing] = useState(false);
   const [screenShaking, setScreenShaking] = useState(false);
+  const [hasUnreadAlert, setHasUnreadAlert] = useState(false);
 
-  // #51 Unread Glowing Ember Notification State
-  const [hasUnreadAlert, setHasUnreadAlert] = useState(true);
-
+  // Clean Empty Initial Vault State (No sample data)
   const [items, setItems] = useState<VaultItem[]>(INITIAL_VAULT_ITEMS);
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [jumpPage, setJumpPage] = useState<number | undefined>(undefined);
@@ -158,7 +182,19 @@ export default function App() {
   const [shareTargetItem, setShareTargetItem] = useState<VaultItem | null>(null);
 
   const [offlineSyncTime, setOfflineSyncTime] = useState<string | null>(null);
-  const [toastInfo, setToastInfo] = useState<{ msg: string; kind: 'approved' | 'denied' } | null>(null);
+  const [toastInfo, setToastInfo] = useState<{
+    msg: string;
+    kind: 'approved' | 'denied';
+  } | null>(null);
+
+  const itemsRef = useRef<VaultItem[]>(items);
+  itemsRef.current = items;
+  const canvasPositionsRef = useRef<Record<string, CanvasNodePos>>(canvasPositions);
+  canvasPositionsRef.current = canvasPositions;
+
+  useEffect(() => {
+    clearLegacySeedFromIndexedDB();
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -177,91 +213,135 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  const showToast = useCallback(
+    (msg: string, kind: 'approved' | 'denied' = 'approved') => {
+      if (kind === 'approved') {
+        playTypewriterDing();
+      } else {
+        playStampThud();
+        setScreenShaking(true);
+        setTimeout(() => setScreenShaking(false), 380);
+      }
+      setToastInfo({ msg, kind });
+      setTimeout(() => {
+        setToastInfo((cur) => (cur?.msg === msg ? null : cur));
+      }, 3400);
+    },
+    []
+  );
+
+  // Firebase Auth & Per-Account Cloud Firestore Subscription (Anti-Overwrite)
   useEffect(() => {
-    let mounted = true;
-    async function bootstrap() {
-      const saved = await loadVaultSnapshotFromIndexedDB();
-      let baseItems = saved?.items?.length ? saved.items : INITIAL_VAULT_ITEMS;
-      const savedIds = new Set(baseItems.map((b) => b.id));
-      for (const seed of INITIAL_VAULT_ITEMS) {
-        if (!savedIds.has(seed.id)) {
-          baseItems = [...baseItems, seed];
-        }
+    let unsubItems: (() => void) | null = null;
+    let unsubComments: (() => void) | null = null;
+    let cancelled = false;
+
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      if (unsubItems) {
+        unsubItems();
+        unsubItems = null;
       }
-      if (saved?.syncedAt && mounted) {
-        setOfflineSyncTime(saved.syncedAt);
+      if (unsubComments) {
+        unsubComments();
+        unsubComments = null;
       }
 
-      const hydrated = await Promise.all(
-        baseItems.map(async (item) => {
-          if (item.type === 'pdf' && !item.pdfDataBase64 && SAMPLE_PDF_SPECS[item.id]) {
-            const b64 = await generateSamplePdfBase64(SAMPLE_PDF_SPECS[item.id]);
-            return { ...item, pdfDataBase64: b64 };
+      if (!user) {
+        setCurrentUser(null);
+        setCloudHydrated(false);
+        setItems([]);
+        setCanvasPositions({});
+        setCanvasConnections([]);
+        setComments([]);
+        setHabits(INITIAL_HABITS);
+        setWidgets(INITIAL_WIDGETS);
+        setActiveItemId(null);
+        setAuthReady(true);
+        return;
+      }
+
+      setCurrentUser(user);
+      setAuthReady(true);
+      setCloudHydrated(false);
+
+      try {
+        // 1. Load existing user profile/habits/widgets from Cloud WITHOUT overwriting
+        const meta = await ensureAndLoadUserVaultState(user);
+        if (cancelled) return;
+        setHabits(meta.habits);
+        setWidgets(meta.widgets);
+
+        // 2. Subscribe to this user's personal items in Cloud Firestore
+        unsubItems = subscribeUserVaultItems(
+          user.uid,
+          (cloudItems, cloudPositions, cloudConnections) => {
+            if (cancelled) return;
+            setItems(cloudItems);
+            setCanvasPositions(cloudPositions);
+            setCanvasConnections(cloudConnections);
+            setOfflineSyncTime(new Date().toISOString());
+            saveVaultSnapshotToIndexedDB(cloudItems, user.uid);
+            setCloudHydrated(true);
           }
-          return item;
-        })
-      );
+        );
 
-      const params = new URLSearchParams(window.location.search);
-      const clipUrl = params.get('clipUrl');
-      const clipTitle = params.get('clipTitle');
-      const clipText = params.get('clipText');
-      if (clipUrl || clipText) {
-        const now = new Date().toISOString();
-        const clippedItem: VaultItem = {
-          id: `clip-${crypto.randomUUID().slice(0, 8)}`,
-          workspaceId: 'personal',
-          title: clipTitle || 'Đoạn trích từ Trình duyệt',
-          type: clipUrl && !clipText ? 'web_archive' : 'note',
-          smartFolder: 'Ghi chú Cá nhân',
-          tags: ['Web Clipper', 'Extension'],
-          excerpt: (clipText || clipUrl || '').slice(0, 140),
-          content: clipText || `Nguồn đã lưu: ${clipUrl}`,
-          sourceUrl: clipUrl || undefined,
-          fileSizeLabel: '14 KB',
-          offlineCached: true,
-          linkedIds: [],
-          versions: [],
-          createdAt: now,
-          updatedAt: now,
-        };
-        hydrated.unshift(clippedItem);
-        window.history.replaceState({}, '', '/');
+        // 3. Subscribe to this user's comments
+        unsubComments = subscribeUserVaultComments(user.uid, (cloudComments) => {
+          if (cancelled) return;
+          setComments(cloudComments);
+        });
+      } catch (err) {
+        console.error('Lỗi đồng bộ tài khoản:', err);
+        setCloudHydrated(true);
       }
+    });
 
-      if (mounted) {
-        setItems(hydrated);
-      }
-    }
-    bootstrap();
     return () => {
-      mounted = false;
+      cancelled = true;
+      unsubAuth();
+      if (unsubItems) unsubItems();
+      if (unsubComments) unsubComments();
     };
   }, []);
 
+  // Persist habits & widgets changes ONLY after initial cloud hydration has completed
   useEffect(() => {
+    if (!currentUser || !cloudHydrated) return;
     const timer = setTimeout(() => {
-      saveVaultSnapshotToIndexedDB(items).then(() => {
-        setOfflineSyncTime(new Date().toISOString());
-      });
-    }, 600);
+      saveUserVaultMetaToCloud(currentUser, habits, widgets).catch((err) =>
+        console.error('Lỗi lưu trạng thái công tác:', err)
+      );
+    }, 500);
     return () => clearTimeout(timer);
-  }, [items]);
+  }, [currentUser, cloudHydrated, habits, widgets]);
 
-  // #49 APPROVED Stamp + Ding | #50 DENIED Stamp + Thud + Screen Shake
-  const showToast = useCallback((msg: string, kind: 'approved' | 'denied' = 'approved') => {
-    if (kind === 'approved') {
-      playTypewriterDing();
-    } else {
-      playStampThud();
-      setScreenShaking(true);
-      setTimeout(() => setScreenShaking(false), 380);
+  const handleGoogleLogin = async () => {
+    setAuthError(null);
+    setIsSigningIn(true);
+    try {
+      await signInWithGoogleAccount();
+      showToast('Đã xác thực tài khoản & đồng bộ kho lưu trữ cá nhân.', 'approved');
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Không thể đăng nhập bằng Google.';
+      setAuthError(msg);
+      throw err;
+    } finally {
+      setIsSigningIn(false);
     }
-    setToastInfo({ msg, kind });
-    setTimeout(() => {
-      setToastInfo((cur) => (cur?.msg === msg ? null : cur));
-    }, 3400);
-  }, []);
+  };
+
+  const handleLogoutAndSave = async () => {
+    if (!currentUser) return;
+    playStampThud();
+    try {
+      await saveUserVaultMetaToCloud(currentUser, habits, widgets);
+      await saveVaultSnapshotToIndexedDB(items, currentUser.uid);
+      await signOutAccount();
+    } catch (err) {
+      console.error('Lỗi khi đăng xuất:', err);
+    }
+  };
 
   const triggerCameraTransition = useCallback(() => {
     playCameraShutterFlash();
@@ -292,13 +372,63 @@ export default function App() {
     }));
   }, []);
 
-  const updateItemById = useCallback((id: string, patch: Partial<VaultItem>) => {
-    setItems((prev) =>
-      prev.map((it) =>
-        it.id === id ? { ...it, ...patch, updatedAt: new Date().toISOString() } : it
-      )
-    );
-  }, []);
+  const handleAddNewItem = useCallback(
+    async (newItem: VaultItem) => {
+      setItems((prev) => [newItem, ...prev]);
+      if (currentUser) {
+        await createVaultItemInCloud(
+          currentUser.uid,
+          newItem,
+          canvasPositionsRef.current[newItem.id]
+        );
+      }
+    },
+    [currentUser]
+  );
+
+  const updateItemById = useCallback(
+    (id: string, patch: Partial<VaultItem>) => {
+      const now = new Date().toISOString();
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== id) return it;
+          const updated: VaultItem = { ...it, ...patch, updatedAt: now };
+          if (currentUser) {
+            updateVaultItemInCloud(
+              currentUser.uid,
+              updated,
+              canvasPositionsRef.current[id]
+            ).catch((err) => console.error('Lỗi lưu hồ sơ:', err));
+          }
+          return updated;
+        })
+      );
+    },
+    [currentUser]
+  );
+
+  const handleUpdateCanvasPositions = useCallback(
+    (nextPositions: Record<string, CanvasNodePos>) => {
+      const prevPositions = canvasPositionsRef.current;
+      setCanvasPositions(nextPositions);
+      if (!currentUser) return;
+
+      // Sync any item whose canvas position or pin state changed
+      itemsRef.current.forEach((item) => {
+        const prevPos = prevPositions[item.id];
+        const nextPos = nextPositions[item.id];
+        const changed =
+          Boolean(prevPos) !== Boolean(nextPos) ||
+          (prevPos && nextPos && (prevPos.x !== nextPos.x || prevPos.y !== nextPos.y));
+        if (changed) {
+          updateVaultItemInCloud(currentUser.uid, item, nextPos).catch((err) =>
+            console.error('Lỗi lưu tọa độ bảng ghim:', err)
+          );
+        }
+      });
+    },
+    [currentUser]
+  );
 
   const openItem = (item: VaultItem, opts?: { page?: number; timestampSec?: number }) => {
     triggerCameraTransition();
@@ -315,19 +445,23 @@ export default function App() {
     setSidebarOpen(false);
   };
 
-  // #37 Tin Trash Bin Crumple & Shred Delete
+  // Tin Trash Bin Crumple & Shred Delete (Also removes from Cloud Firestore)
   const handleCrumpleDelete = (e: React.MouseEvent, id: string, title: string) => {
     e.stopPropagation();
     playPaperCrumple();
     setCrumplingId(id);
     setTimeout(() => {
       setItems((prev) => prev.filter((it) => it.id !== id));
+      if (currentUser) {
+        deleteVaultItemFromCloud(currentUser.uid, id).catch((err) =>
+          console.error('Lỗi xóa hồ sơ trên đám mây:', err)
+        );
+      }
       setCrumplingId(null);
-      showToast(`Đã vò nát & hủy hồ sơ "${title}" vào thùng rác thiếc.`, 'denied');
+      showToast(`Đã vò nát & hủy hồ sơ "${title}" khỏi tài khoản.`, 'denied');
     }, 430);
   };
 
-  // #42 Binder Clip Priority Toggle
   const toggleBinderPin = (e: React.MouseEvent, item: VaultItem) => {
     e.stopPropagation();
     playDateClick();
@@ -347,7 +481,11 @@ export default function App() {
         if (typeFilter !== 'all' && it.type !== typeFilter) return false;
         if (priorityFilter === 'pinned' && !it.pinned) return false;
         if (priorityFilter === 'standard' && it.pinned) return false;
-        if (dateFilter && !it.updatedAt.startsWith(dateFilter) && !it.createdAt.startsWith(dateFilter)) {
+        if (
+          dateFilter &&
+          !it.updatedAt.startsWith(dateFilter) &&
+          !it.createdAt.startsWith(dateFilter)
+        ) {
           return false;
         }
         return true;
@@ -367,9 +505,25 @@ export default function App() {
     habits: 'Nhật Ký Công Tác',
   };
 
-  // #56 Show Closed Top Secret Folder Cover until opened
-  if (!dossierGateOpen) {
-    return <TopSecretLoginGate onUnlock={() => setDossierGateOpen(true)} />;
+  if (!authReady) {
+    return (
+      <div className="min-h-screen oak-desk-bg flex items-center justify-center p-4">
+        <div className="p-6 manila-paper torn-paper-card border-2 border-[#2A2018]">
+          <RevolverSpinner label="Đang kiểm tra niêm phong tài khoản..." />
+        </div>
+      </div>
+    );
+  }
+
+  // Require Google Login so each email gets its own isolated multi-device account
+  if (!currentUser) {
+    return (
+      <TopSecretLoginGate
+        onUnlock={handleGoogleLogin}
+        isAuthenticating={isSigningIn}
+        authError={authError}
+      />
+    );
   }
 
   return (
@@ -378,15 +532,12 @@ export default function App() {
         screenShaking ? 'animate-stamp-shake' : ''
       }`}
     >
-      {/* #4, #57, #58, #60, #27, #3 Background Desk Stains, Map, Marginalia, God Rays, Vignette & Grain */}
       <DeskBackgroundDecor />
 
-      {/* #43 Camera Shutter Flash Overlay */}
       {cameraFlashing && (
         <div className="pointer-events-none fixed inset-0 z-[70] bg-[#FFF8E1] animate-camera-flash" />
       )}
 
-      {/* MOBILE BACKDROP */}
       {sidebarOpen && (
         <div
           onClick={() => setSidebarOpen(false)}
@@ -394,14 +545,13 @@ export default function App() {
         />
       )}
 
-      {/* #11 SIDEBAR METAL SPRING CLIPBOARD CLAMPING LINED MANILA PAPER */}
+      {/* SIDEBAR METAL SPRING CLIPBOARD */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-[274px] p-2.5 lg:static lg:translate-x-0 transition-transform duration-200 flex flex-col shrink-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         <div className="relative flex-1 flex flex-col bg-[#5C3D24] dark:bg-[#2E0909] border-2 border-[#1A120B] p-2 pt-7 hard-shadow-lg">
-          {/* Brushed Steel Spring Clipboard Clasp at Top */}
           <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-32 h-8 bg-gradient-to-b from-[#B9B2A8] via-[#8E877D] to-[#5E5850] border-2 border-[#1A120B] shadow-md flex items-center justify-center z-20">
             <div className="w-4 h-4 rounded-full border-2 border-[#1A120B] bg-[#2B1D13]" />
             <span className="ml-2 font-typewriter text-[9px] text-[#14100C] tracking-widest">
@@ -409,9 +559,7 @@ export default function App() {
             </span>
           </div>
 
-          {/* Paper Stack Clamped Under Clipboard */}
           <div className="flex-1 flex flex-col manila-paper border border-[#6E5332] overflow-hidden">
-            {/* Bureau Header */}
             <div className="h-12 px-4 flex items-center justify-between border-b-2 border-[#2A2018] dark:border-[#9E1B16] bg-[#DFC79C] dark:bg-[#3A0C0C] shrink-0">
               <button
                 onClick={() => switchSection('dashboard')}
@@ -427,7 +575,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* #32 Rolodex-Style Workspace Selector */}
+            {/* Rolodex Workspace Selector */}
             <div className="p-3 border-b border-[#6E5332]/60 bg-[#E6D1A8]/60 dark:bg-[#240606]">
               <div className="flex items-center justify-between px-1 mb-1.5">
                 <label className="font-typewriter text-[10px] uppercase tracking-wider text-[#574A3D] dark:text-[#FF9E8E]">
@@ -444,7 +592,7 @@ export default function App() {
                   }}
                   className="w-full px-2.5 py-2 text-xs font-typewriter bg-transparent focus:outline-none"
                 >
-                  <option value="all">Toàn Cục Lưu Trữ ({items.length})</option>
+                  <option value="all">Toàn Kho Của Bạn ({items.length})</option>
                   {WORKSPACES.map((ws) => (
                     <option key={ws.id} value={ws.id}>
                       {ws.label}
@@ -489,7 +637,8 @@ export default function App() {
                   Ngăn Hồ Sơ Thông Minh
                 </div>
                 {SMART_FOLDERS.map((folder) => {
-                  const isSelected = activeFolder === folder && navSection === 'library' && !activeItem;
+                  const isSelected =
+                    activeFolder === folder && navSection === 'library' && !activeItem;
                   return (
                     <button
                       key={folder}
@@ -516,20 +665,27 @@ export default function App() {
               </div>
             </nav>
 
-            {/* Footer Police Shield Badge (#54) + Ember Alert (#51) + Offline PWA */}
+            {/* Footer Account Profile & Cloud Sync Status */}
             <div className="p-3 border-t-2 border-[#2A2018] dark:border-[#9E1B16] space-y-2.5 bg-[#DFC79C]/85 dark:bg-[#240606]">
               <button
                 onClick={() => {
-                  saveVaultSnapshotToIndexedDB(items).then(() => {
+                  saveVaultSnapshotToIndexedDB(items, currentUser.uid).then(() => {
                     setOfflineSyncTime(new Date().toISOString());
-                    showToast('Đã đồng bộ hồ sơ về bộ nhớ ngoại tuyến PWA (IndexedDB).', 'approved');
+                    showToast(
+                      'Đã đồng bộ hồ sơ về bộ nhớ Đám mây & PWA ngoại tuyến.',
+                      'approved'
+                    );
                   });
                 }}
                 className="w-full flex items-center justify-between px-3 py-2 bg-[#F5EAD2] dark:bg-[#1E0505] border border-[#6E5332] text-[11px] hover:bg-[#EBDAB9]"
               >
                 <span className="flex items-center gap-1.5 font-typewriter">
-                  <HardDriveDownload className="w-3.5 h-3.5 text-[#9E1B16]" />
-                  Lưu Offline PWA
+                  {cloudHydrated ? (
+                    <CloudCheck className="w-3.5 h-3.5 text-[#166534]" />
+                  ) : (
+                    <HardDriveDownload className="w-3.5 h-3.5 text-[#9E1B16]" />
+                  )}
+                  Đồng Bộ Đa Thiết Bị
                 </span>
                 <span className="font-mono-tabular text-[10px]">
                   {offlineSyncTime
@@ -537,48 +693,58 @@ export default function App() {
                         hour: '2-digit',
                         minute: '2-digit',
                       })
-                    : 'Sẵn sàng'}
+                    : 'Đã lưu'}
                 </span>
               </button>
 
-              {/* #54 Police Shield Badge Avatar + #51 Glowing Ember Unread Indicator */}
-              <div
-                onClick={() => setHasUnreadAlert(false)}
-                title="Thanh tra Minh Nguyễn · Nhấp để xác nhận thông báo ca trực"
-                className="flex items-center gap-2.5 px-1 cursor-pointer"
-              >
-                <div className="relative w-10 h-11 shrink-0 flex items-center justify-center">
-                  {/* Shield Border SVG */}
-                  <svg viewBox="0 0 40 44" className="absolute inset-0 w-full h-full">
-                    <path
-                      d="M20 2 L36 8 V21 C36 31 28 38 20 42 C12 38 4 31 4 21 V8 Z"
-                      fill="#C69C4B"
-                      stroke="#1A120B"
-                      strokeWidth="2.2"
-                    />
-                  </svg>
-                  <img
-                    src="/src/assets/images/vault_user_avatar_1794554761205.jpg"
-                    alt="Thanh tra Minh Nguyễn"
-                    referrerPolicy="no-referrer"
-                    className="relative w-6 h-6 rounded-full object-cover border border-[#1A120B] sepia-[0.2]"
-                  />
-                  {/* #51 Glowing Cigarette Ember Unread Dot */}
-                  {hasUnreadAlert && (
-                    <span
-                      className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#FF4500] border border-[#1A120B] shadow-[0_0_8px_#FF4500] animate-pulse"
-                      title="Có manh mối mới chưa đọc"
-                    />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-typewriter text-xs font-bold truncate">
-                    TT. Minh Nguyễn
+              {/* Logged-in User Police Shield Badge Avatar */}
+              <div className="flex items-center justify-between gap-2 px-1">
+                <div
+                  onClick={() => setHasUnreadAlert(false)}
+                  className="flex items-center gap-2 min-w-0 cursor-pointer"
+                >
+                  <div className="relative w-10 h-11 shrink-0 flex items-center justify-center">
+                    <svg viewBox="0 0 40 44" className="absolute inset-0 w-full h-full">
+                      <path
+                        d="M20 2 L36 8 V21 C36 31 28 38 20 42 C12 38 4 31 4 21 V8 Z"
+                        fill="#C69C4B"
+                        stroke="#1A120B"
+                        strokeWidth="2.2"
+                      />
+                    </svg>
+                    {currentUser.photoURL ? (
+                      <img
+                        src={currentUser.photoURL}
+                        alt={currentUser.displayName || 'Thanh tra'}
+                        referrerPolicy="no-referrer"
+                        className="relative w-6 h-6 rounded-full object-cover border border-[#1A120B] sepia-[0.15]"
+                      />
+                    ) : (
+                      <span className="relative font-stamp text-xs text-[#1A120B]">
+                        {(currentUser.displayName || currentUser.email || 'T')[0].toUpperCase()}
+                      </span>
+                    )}
+                    {hasUnreadAlert && (
+                      <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#FF4500] border border-[#1A120B] shadow-[0_0_8px_#FF4500] animate-pulse" />
+                    )}
                   </div>
-                  <div className="font-mono-tabular text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
-                    Huy hiệu #4407 · Cấp {habits.level}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-typewriter text-xs font-bold truncate">
+                      {currentUser.displayName || currentUser.email?.split('@')[0]}
+                    </div>
+                    <div className="font-mono-tabular text-[10px] text-[#574A3D] dark:text-[#FF9E8E] truncate">
+                      {currentUser.email}
+                    </div>
                   </div>
                 </div>
+
+                <button
+                  onClick={handleLogoutAndSave}
+                  title="Đăng xuất tài khoản (Dữ liệu đã được lưu an toàn trên đám mây)"
+                  className="p-2 border border-[#6E5332] bg-[#F5EAD2] dark:bg-[#1E0505] hover:bg-[#9E1B16] hover:text-white transition-colors shrink-0"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
           </div>
@@ -587,9 +753,7 @@ export default function App() {
 
       {/* MAIN ARCHIVE WORKSPACE */}
       <div className="flex-1 flex flex-col min-w-0 relative z-10">
-        {/* TOP HEADER WITH #10 STAGGERED FOLDER TABS & #53 RED-STRING BREADCRUMBS */}
         <header className="px-4 sm:px-6 pt-2.5 pb-2 bg-[#2B1D13]/85 dark:bg-[#1A0404]/90 border-b-2 border-[#14100C] dark:border-[#9E1B16] flex flex-col gap-2 shrink-0">
-          {/* Row 1: Staggered Manila Folder Tabs (#10) + Right Controls */}
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="flex items-end gap-1 overflow-x-auto max-w-full">
               <button
@@ -623,17 +787,17 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0 pb-1">
-              {/* #17 Brass Magnifying Glass Search Button */}
               <button
                 onClick={() => setSearchOpen(true)}
                 className="flex items-center gap-2 px-3 py-1.5 border-2 border-[#9E7531] bg-[#EBDAB9] dark:bg-[#2B0909] text-xs font-typewriter hover:border-[#9E1B16] whitespace-nowrap"
               >
                 <Search className="w-3.5 h-3.5 text-[#9E1B16]" />
                 <span className="hidden sm:inline">Soi Kính Lúp</span>
-                <span className="font-mono-tabular text-[10px] opacity-70 hidden md:inline">⌘K</span>
+                <span className="font-mono-tabular text-[10px] opacity-70 hidden md:inline">
+                  ⌘K
+                </span>
               </button>
 
-              {/* Vietnamese Bespoke Typography Specimen Modal Button */}
               <button
                 onClick={() => {
                   playDateClick();
@@ -646,10 +810,8 @@ export default function App() {
                 <span className="hidden md:inline">Bộ Chữ Việt (12 Font)</span>
               </button>
 
-              {/* #59 Live Brass Pocket Watch */}
               <BureauPocketWatch />
 
-              {/* #26 Metal Toggle Switch for #28 Darkroom Red Safelight Mode */}
               <MetalToggleSwitch
                 checked={darkMode}
                 onToggle={() => {
@@ -659,16 +821,13 @@ export default function App() {
                 label="Phòng Rửa Ảnh"
               />
 
-              {/* Re-lock Closed Folder Gate */}
               <button
-                onClick={() => {
-                  playStampThud();
-                  setDossierGateOpen(false);
-                }}
-                title="Đóng bìa hồ sơ mật"
-                className="p-1.5 border border-[#6E5332] bg-[#C9B38C] dark:bg-[#3A0C0C] hover:bg-[#DFC79C]"
+                onClick={handleLogoutAndSave}
+                title="Đăng xuất & Lưu toàn bộ dữ liệu tài khoản"
+                className="flex items-center gap-1 px-2.5 py-1.5 border border-[#6E5332] bg-[#C9B38C] dark:bg-[#3A0C0C] hover:bg-[#9E1B16] hover:text-white text-xs font-typewriter transition-colors"
               >
-                <Lock className="w-4 h-4 text-[#1A120B] dark:text-[#FFD6CE]" />
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">Đăng xuất</span>
               </button>
 
               <RubberStampButton onClick={() => setClipperOpen(true)} stampWord="INTAKE">
@@ -680,7 +839,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Row 2: #53 Red-String Breadcrumbs + Active Section/Item Bespoke Font Tag */}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#EBDAB9] dark:text-[#FFD6CE] pt-1">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-2.5 h-2.5 rounded-full bg-[#9E1B16] border border-[#F5EAD2] shrink-0" />
@@ -694,7 +852,11 @@ export default function App() {
                 <>
                   <span className="w-8 h-0.5 bg-[#9E1B16] inline-block shrink-0" />
                   <span className="w-2.5 h-2.5 rounded-full bg-[#9E1B16] border border-[#F5EAD2] shrink-0" />
-                  <span className={`${ITEM_TYPE_TYPOGRAPHY[activeItem.type].titleClass} text-[#F5EAD2] truncate`}>
+                  <span
+                    className={`${
+                      ITEM_TYPE_TYPOGRAPHY[activeItem.type].titleClass
+                    } text-[#F5EAD2] truncate`}
+                  >
                     {activeItem.title}
                   </span>
                 </>
@@ -715,10 +877,15 @@ export default function App() {
           </div>
         </header>
 
-        {/* #49 APPROVED / #50 DENIED Rubber Stamp Toast */}
         {toastInfo && (
           <div className="fixed bottom-8 right-5 z-50 px-4 py-3 manila-paper torn-paper-card border-2 border-[#2A2018] hard-shadow-lg flex items-center gap-3 max-w-md">
-            <span className={toastInfo.kind === 'approved' ? 'stamp-approved text-[10px]' : 'stamp-crimson text-[10px]'}>
+            <span
+              className={
+                toastInfo.kind === 'approved'
+                  ? 'stamp-approved text-[10px]'
+                  : 'stamp-crimson text-[10px]'
+              }
+            >
               {toastInfo.kind === 'approved' ? 'APPROVED' : 'DENIED'}
             </span>
             <span className="font-typewriter text-xs">{toastInfo.msg}</span>
@@ -728,7 +895,11 @@ export default function App() {
         {/* CONTENT VIEWPORT */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="max-w-7xl mx-auto">
-            {activeItem ? (
+            {!cloudHydrated ? (
+              <div className="p-8 manila-paper torn-paper-card border-2 border-[#2A2018] text-center">
+                <RevolverSpinner label="Đang tải kho hồ sơ riêng của tài khoản từ đám mây..." />
+              </div>
+            ) : activeItem ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3 p-4 manila-paper torn-paper-card border-2 border-[#2A2018] dark:border-[#9E1B16]">
                   <div className="flex items-center gap-3 min-w-0">
@@ -743,13 +914,23 @@ export default function App() {
                       Trở về
                     </button>
                     <div className="min-w-0">
-                      <h1 className={`${ITEM_TYPE_TYPOGRAPHY[activeItem.type].titleClass} truncate`}>
+                      <h1
+                        className={`${
+                          ITEM_TYPE_TYPOGRAPHY[activeItem.type].titleClass
+                        } truncate`}
+                      >
                         {activeItem.title}
                       </h1>
-                      <div className={`${ITEM_TYPE_TYPOGRAPHY[activeItem.type].metaClass} text-[#574A3D] dark:text-[#FF9E8E] flex flex-wrap items-center gap-2`}>
+                      <div
+                        className={`${
+                          ITEM_TYPE_TYPOGRAPHY[activeItem.type].metaClass
+                        } text-[#574A3D] dark:text-[#FF9E8E] flex flex-wrap items-center gap-2`}
+                      >
                         <span>{TYPE_LABEL[activeItem.type]}</span>
                         <span aria-hidden="true">·</span>
-                        <span>Font: {ITEM_TYPE_TYPOGRAPHY[activeItem.type].badgeFontName}</span>
+                        <span>
+                          Font: {ITEM_TYPE_TYPOGRAPHY[activeItem.type].badgeFontName}
+                        </span>
                         <span aria-hidden="true">·</span>
                         <span>{activeItem.smartFolder}</span>
                         <span aria-hidden="true">·</span>
@@ -779,7 +960,9 @@ export default function App() {
                     pdfBase64={activeItem.pdfDataBase64}
                     initialPage={jumpPage ?? activeItem.lastReadPage ?? 1}
                     annotations={activeItem.annotations ?? []}
-                    onUpdateAnnotations={(anns) => updateItemById(activeItem.id, { annotations: anns })}
+                    onUpdateAnnotations={(anns) =>
+                      updateItemById(activeItem.id, { annotations: anns })
+                    }
                     onPageProgress={(page, total) =>
                       updateItemById(activeItem.id, {
                         lastReadPage: page,
@@ -802,18 +985,22 @@ export default function App() {
                     item={activeItem}
                     comments={comments.filter((c) => c.itemId === activeItem.id)}
                     onUpdateItem={(patch) => updateItemById(activeItem.id, patch)}
-                    onAddComment={(text) =>
-                      setComments((prev) => [
-                        ...prev,
-                        {
-                          id: crypto.randomUUID(),
-                          itemId: activeItem.id,
-                          author: 'Thanh tra Minh (Chủ trì)',
-                          text,
-                          createdAt: new Date().toISOString(),
-                        },
-                      ])
-                    }
+                    onAddComment={(text) => {
+                      const newComment: CollaborativeComment = {
+                        id: `cm-${crypto.randomUUID().slice(0, 8)}`,
+                        itemId: activeItem.id,
+                        author:
+                          currentUser.displayName ||
+                          currentUser.email?.split('@')[0] ||
+                          'Thanh tra',
+                        text,
+                        createdAt: new Date().toISOString(),
+                      };
+                      setComments((prev) => [...prev, newComment]);
+                      createCommentInCloud(currentUser.uid, newComment).catch((err) =>
+                        console.error('Lỗi lưu bút phê:', err)
+                      );
+                    }}
                     onOpenShareModal={() => setShareTargetItem(activeItem)}
                     onGainExp={handleGainExp}
                   />
@@ -833,13 +1020,10 @@ export default function App() {
                 items={items}
                 onOpenItem={(it) => openItem(it)}
                 onCreateLink={(src, dst) => {
-                  setItems((prev) =>
-                    prev.map((it) =>
-                      it.id === src && !it.linkedIds.includes(dst)
-                        ? { ...it, linkedIds: [...it.linkedIds, dst] }
-                        : it
-                    )
-                  );
+                  const srcItem = items.find((i) => i.id === src);
+                  if (srcItem && !srcItem.linkedIds.includes(dst)) {
+                    updateItemById(src, { linkedIds: [...srcItem.linkedIds, dst] });
+                  }
                   handleGainExp(10, 'Căng dây đỏ liên kết đầu mối');
                 }}
               />
@@ -848,12 +1032,16 @@ export default function App() {
                 items={items}
                 positions={canvasPositions}
                 connections={canvasConnections}
-                onUpdatePositions={setCanvasPositions}
+                onUpdatePositions={handleUpdateCanvasPositions}
                 onAddConnection={(fromId, toId) => {
                   setCanvasConnections((prev) => [
                     ...prev,
                     { id: crypto.randomUUID(), fromId, toId },
                   ]);
+                  const srcItem = items.find((i) => i.id === fromId);
+                  if (srcItem && !srcItem.linkedIds.includes(toId)) {
+                    updateItemById(fromId, { linkedIds: [...srcItem.linkedIds, toId] });
+                  }
                   handleGainExp(10, 'Liên kết chứng cứ trên Bảng ghim');
                 }}
                 onOpenItem={(it) => openItem(it)}
@@ -873,14 +1061,13 @@ export default function App() {
                   <div className="flex flex-wrap items-center justify-between gap-4">
                     <div>
                       <div className="font-mono-tabular text-[11px] uppercase tracking-widest text-[#574A3D] dark:text-[#FF9E8E]">
-                        DANH MỤC LƯU TRỮ · CATALOG INDEX
+                        DANH MỤC LƯU TRỮ CÁ NHÂN · {currentUser.email}
                       </div>
                       <h1 className="font-typewriter text-2xl font-bold tracking-tight">
                         Kho Hồ Sơ & Vật Chứng Cục Lưu Trữ
                       </h1>
                     </div>
 
-                    {/* #23 Polaroid Scattered Gallery Mode Toggle + #34 Rolling Date Stamp Filter */}
                     <div className="flex flex-wrap items-center gap-2">
                       <RollingDateStamp value={dateFilter} onChange={setDateFilter} />
                       {dateFilter && (
@@ -908,7 +1095,6 @@ export default function App() {
                   <div className="masking-tape-divider" />
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    {/* Type Filter */}
                     <div className="flex flex-wrap items-center gap-1">
                       {(
                         [
@@ -936,9 +1122,10 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* #42 Colored Binder Clips Priority Sorting */}
                     <div className="flex items-center gap-1.5">
-                      <span className="font-typewriter text-[10px] uppercase">Kẹp Phân Loại:</span>
+                      <span className="font-typewriter text-[10px] uppercase">
+                        Kẹp Phân Loại:
+                      </span>
                       {(
                         [
                           { id: 'all', label: 'Tất cả', clipColor: 'bg-[#2A2018]' },
@@ -955,7 +1142,9 @@ export default function App() {
                               : 'bg-[#F5EAD2] dark:bg-[#1E0505] border-[#6E5332]'
                           }`}
                         >
-                          <span className={`w-2.5 h-2.5 ${p.clipColor} border border-[#F5EAD2]`} />
+                          <span
+                            className={`w-2.5 h-2.5 ${p.clipColor} border border-[#F5EAD2]`}
+                          />
                           {p.label}
                         </button>
                       ))}
@@ -964,7 +1153,6 @@ export default function App() {
                 </div>
 
                 {filteredItems.length === 0 ? (
-                  /* #24 Empty State (Ashtray, Empty Mug, Crumpled Paper) */
                   <EmptyAshtrayState onAction={() => setClipperOpen(true)} />
                 ) : (
                   <div
@@ -997,11 +1185,14 @@ export default function App() {
                             isCrumpling ? 'animate-crumple' : ''
                           } hover:-translate-y-1.5 hover:rotate-1 transition-all duration-200 flex flex-col`}
                         >
-                          {/* #42 Clickable Colored Binder Clip Top Corner */}
                           <button
                             type="button"
                             onClick={(e) => toggleBinderPin(e, item)}
-                            title={item.pinned ? 'Kẹp Đỏ: Khẩn cấp (Nhấn để đổi)' : 'Kẹp Đồng: Thường (Nhấn để gắn Khẩn cấp)'}
+                            title={
+                              item.pinned
+                                ? 'Kẹp Đỏ: Khẩn cấp (Nhấn để đổi)'
+                                : 'Kẹp Đồng: Thường (Nhấn để gắn Khẩn cấp)'
+                            }
                             className={`absolute -top-2.5 left-4 px-2 py-0.5 border border-[#1A120B] text-[9px] font-stamp uppercase text-[#F5EAD2] z-10 flex items-center gap-1 shadow-sm ${
                               item.pinned ? 'bg-[#9E1B16]' : 'bg-[#7A5E35]'
                             }`}
@@ -1010,11 +1201,11 @@ export default function App() {
                             {item.pinned ? 'KHẨN' : 'LƯU'}
                           </button>
 
-                          {/* Specimen Header Strip using category-specific metaClass */}
-                          <div className={`px-4 pt-3 pb-2 border-b border-[#6E5332]/40 flex items-center justify-between ${itemTypo.metaClass}`}>
+                          <div
+                            className={`px-4 pt-3 pb-2 border-b border-[#6E5332]/40 flex items-center justify-between ${itemTypo.metaClass}`}
+                          >
                             <span>CAT. Nº LP-{String(idx + 1).padStart(3, '0')}</span>
                             <span className="flex items-center gap-1.5">
-                              {/* #15 Custom Detective Evidence Illustrations */}
                               <EvidenceThumbnailIcon type={item.type} />
                               <span>{TYPE_LABEL[item.type]}</span>
                             </span>
@@ -1023,7 +1214,9 @@ export default function App() {
                           {item.coverImage ? (
                             <div
                               className={`${
-                                polaroidMode ? 'h-52 my-2 border-2 border-[#2A2018]' : 'h-44 border-b border-[#6E5332]/40'
+                                polaroidMode
+                                  ? 'h-52 my-2 border-2 border-[#2A2018]'
+                                  : 'h-44 border-b border-[#6E5332]/40'
                               } bg-[#1C1612] overflow-hidden`}
                             >
                               <img
@@ -1046,33 +1239,35 @@ export default function App() {
                                 </span>
                               </div>
 
-                              {/* Title using bespoke Vietnamese font per item category */}
                               <h3
                                 className={`${
-                                  polaroidMode ? 'font-polaroid text-lg font-bold' : itemTypo.titleClass
+                                  polaroidMode
+                                    ? 'font-polaroid text-lg font-bold'
+                                    : itemTypo.titleClass
                                 } leading-snug line-clamp-2 group-hover:text-[#9E1B16] dark:group-hover:text-[#FF6B5B] transition-colors`}
                               >
                                 {item.title}
                               </h3>
 
-                              {/* Excerpt using bespoke Vietnamese body font per item category */}
-                              <p className={`${itemTypo.bodyClass} line-clamp-2 leading-snug opacity-90`}>
+                              <p
+                                className={`${itemTypo.bodyClass} line-clamp-2 leading-snug opacity-90`}
+                              >
                                 {item.excerpt}
                               </p>
                             </div>
 
                             <div className="pt-3 border-t border-[#6E5332]/40 flex items-center justify-between gap-2">
-                              {/* #25 Baggage Tags */}
                               <div className="flex flex-wrap gap-1.5 min-w-0">
                                 {item.tags.slice(0, 2).map((tag) => (
                                   <BaggageTag key={tag} text={tag} />
                                 ))}
                               </div>
 
-                              {/* #37 Tin Trash Bin Crumple Delete */}
                               <button
                                 type="button"
-                                onClick={(e) => handleCrumpleDelete(e, item.id, item.title)}
+                                onClick={(e) =>
+                                  handleCrumpleDelete(e, item.id, item.title)
+                                }
                                 title="Vò nát & bỏ vào thùng rác thiếc"
                                 className="p-1.5 border border-[#6E5332] bg-[#EBDAB9] dark:bg-[#240606] hover:bg-[#9E1B16] hover:text-white transition-colors shrink-0"
                               >
@@ -1090,9 +1285,8 @@ export default function App() {
           </div>
         </main>
 
-        {/* #55 CLASSIFIED FOOTER DISCLAIMER */}
         <footer className="px-4 py-1.5 bg-[#1B120B] dark:bg-[#140202] border-t border-[#463526] dark:border-[#6E120E] text-center font-typewriter text-[10px] tracking-[0.22em] text-[#C9B38C] dark:text-[#FF8C7A] uppercase shrink-0">
-          PROPERTY OF SCOTLAND YARD · BUREAU OF ARCHIVES · DO NOT DISTRIBUTE
+          PROPERTY OF SCOTLAND YARD · BUREAU OF ARCHIVES · ACCOUNT: {currentUser.email}
         </footer>
       </div>
 
@@ -1102,7 +1296,7 @@ export default function App() {
         onClose={() => setClipperOpen(false)}
         activeWorkspace={activeWorkspace === 'all' ? 'personal' : activeWorkspace}
         onAddItem={(newItem) => {
-          setItems((prev) => [newItem, ...prev]);
+          handleAddNewItem(newItem);
           openItem(newItem);
         }}
         onGainExp={handleGainExp}
@@ -1146,7 +1340,10 @@ export default function App() {
               pageCount,
               lastReadPage: 1,
               readProgressPct: 0,
-              fileSizeLabel: `${Math.max(50, Math.round((base64.length * 0.75) / 1024))} KB`,
+              fileSizeLabel: `${Math.max(
+                50,
+                Math.round((base64.length * 0.75) / 1024)
+              )} KB`,
               offlineCached: true,
               linkedIds: [activeItem.id],
               annotations: [],
@@ -1154,7 +1351,7 @@ export default function App() {
               createdAt: now,
               updatedAt: now,
             };
-            setItems((prev) => [created, ...prev]);
+            handleAddNewItem(created);
             openItem(created, { page: 1 });
             handleGainExp(20, 'Cắt / Gộp hồ sơ PDF');
           }}

@@ -1,46 +1,69 @@
 import type { VaultItem } from '@/src/types/vault';
 
 const DB_NAME = 'aethelvault_offline_db';
+const DB_VERSION = 2;
 const STORE_NAME = 'vault_state';
-const STATE_KEY = 'primary_snapshot';
 
-function openDb(): Promise<IDBDatabase> {
+function openVaultDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
 }
 
-export async function saveVaultSnapshotToIndexedDB(items: VaultItem[]): Promise<void> {
+export async function clearLegacySeedFromIndexedDB(): Promise<void> {
   try {
-    const db = await openDb();
+    const db = await openVaultDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete('current-vault');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // Ignore IDB errors
+  }
+}
+
+export async function saveVaultSnapshotToIndexedDB(
+  items: VaultItem[],
+  userUid?: string
+): Promise<void> {
+  if (!userUid) return;
+  try {
+    const db = await openVaultDB();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put({ items, syncedAt: new Date().toISOString() }, STATE_KEY);
+      const store = tx.objectStore(STORE_NAME);
+      store.put(
+        { items, syncedAt: new Date().toISOString() },
+        `vault-user-${userUid}`
+      );
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // Fallback gracefully if private browsing blocks IndexedDB
+    // Fallback to localStorage if IDB is unavailable
   }
 }
 
-export async function loadVaultSnapshotFromIndexedDB(): Promise<{
-  items: VaultItem[];
-  syncedAt: string;
-} | null> {
+export async function loadVaultSnapshotFromIndexedDB(
+  userUid?: string
+): Promise<{ items: VaultItem[]; syncedAt: string } | null> {
+  if (!userUid) return null;
   try {
-    const db = await openDb();
+    const db = await openVaultDB();
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readonly');
-      const req = tx.objectStore(STORE_NAME).get(STATE_KEY);
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(`vault-user-${userUid}`);
       req.onsuccess = () => resolve(req.result ?? null);
       req.onerror = () => reject(req.error);
     });

@@ -5,6 +5,7 @@ import {
   MousePointer,
   Plus,
   StickyNote,
+  Trash2,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -26,6 +27,9 @@ interface FloatingNote {
   text: string;
 }
 
+const CARD_WIDTH = 256; // w-64 = 256px
+const NOTE_WIDTH = 224; // w-56 = 224px
+
 export default function InfiniteCanvasView({
   items,
   positions,
@@ -38,14 +42,7 @@ export default function InfiniteCanvasView({
   const [zoom, setZoom] = useState(0.95);
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
-  const [notes, setNotes] = useState<FloatingNote[]>([
-    {
-      id: 'fn-1',
-      x: 340,
-      y: 230,
-      text: 'GHI CHÚ HIỆN TRƯỜNG: Kéo ảnh nghi phạm, PDF báo cáo & băng CCTV cạnh nhau để đối chiếu bằng dây đỏ.',
-    },
-  ]);
+  const [notes, setNotes] = useState<FloatingNote[]>([]);
 
   const draggingCardRef = useRef<{
     id: string;
@@ -55,6 +52,7 @@ export default function InfiniteCanvasView({
     origX: number;
     origY: number;
   } | null>(null);
+
   const panningRef = useRef<{
     startX: number;
     startY: number;
@@ -65,6 +63,25 @@ export default function InfiniteCanvasView({
   const visibleItems = items.filter((it) => positions[it.id]);
   const unplacedItems = items.filter((it) => !positions[it.id]);
 
+  // Exact pin coordinates at the top-center of each card or sticky note
+  const getPinPosition = (id: string): { x: number; y: number } | null => {
+    const itemPos = positions[id];
+    if (itemPos) {
+      return {
+        x: itemPos.x + CARD_WIDTH / 2,
+        y: itemPos.y,
+      };
+    }
+    const note = notes.find((n) => n.id === id);
+    if (note) {
+      return {
+        x: note.x + NOTE_WIDTH / 2,
+        y: note.y,
+      };
+    }
+    return null;
+  };
+
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (draggingCardRef.current) {
       const d = draggingCardRef.current;
@@ -73,11 +90,19 @@ export default function InfiniteCanvasView({
       if (d.kind === 'item') {
         onUpdatePositions({
           ...positions,
-          [d.id]: { ...positions[d.id], x: d.origX + dx, y: d.origY + dy },
+          [d.id]: {
+            ...positions[d.id],
+            x: Math.round(d.origX + dx),
+            y: Math.round(d.origY + dy),
+          },
         });
       } else {
         setNotes((prev) =>
-          prev.map((n) => (n.id === d.id ? { ...n, x: d.origX + dx, y: d.origY + dy } : n))
+          prev.map((n) =>
+            n.id === d.id
+              ? { ...n, x: Math.round(d.origX + dx), y: Math.round(d.origY + dy) }
+              : n
+          )
         );
       }
       return;
@@ -100,10 +125,20 @@ export default function InfiniteCanvasView({
 
   const handleAddBoardCard = (itemId: string) => {
     if (!itemId) return;
+    const count = Object.keys(positions).length;
     onUpdatePositions({
       ...positions,
-      [itemId]: { x: 220 - pan.x / zoom, y: 180 - pan.y / zoom },
+      [itemId]: {
+        x: Math.round(120 + (count % 3) * 290 - pan.x / zoom),
+        y: Math.round(90 + Math.floor(count / 3) * 240 - pan.y / zoom),
+      },
     });
+  };
+
+  const handleUnpinCard = (itemId: string) => {
+    const next = { ...positions };
+    delete next[itemId];
+    onUpdatePositions(next);
   };
 
   return (
@@ -115,7 +150,7 @@ export default function InfiniteCanvasView({
             Bảng Ghim Chứng Cứ Vô Cực
           </span>
           <span className="font-mono-tabular text-[11px] text-[#574A3D] dark:text-[#FF9E8E] hidden sm:inline">
-            · Kéo bảng bần để di chuyển, nhấc thẻ hồ sơ để ghim lại
+            · Đinh ghim gắn sát mép trên thẻ ghi chú, nối dây đỏ trực tiếp vào đầu ghim
           </span>
         </div>
 
@@ -124,9 +159,9 @@ export default function InfiniteCanvasView({
             <select
               value=""
               onChange={(e) => handleAddBoardCard(e.target.value)}
-              className="text-xs px-2.5 py-1.5 border border-[#6E5332] bg-[#F5EAD2] dark:bg-[#1E0505]"
+              className="text-xs px-2.5 py-1.5 border border-[#6E5332] bg-[#F5EAD2] dark:bg-[#1E0505] font-typewriter"
             >
-              <option value="">+ Ghim chứng cứ lên Bảng...</option>
+              <option value="">+ Ghim hồ sơ lên Bảng ({unplacedItems.length})...</option>
               {unplacedItems.map((it) => (
                 <option key={it.id} value={it.id}>
                   {it.title}
@@ -140,9 +175,9 @@ export default function InfiniteCanvasView({
               setNotes((prev) => [
                 ...prev,
                 {
-                  id: crypto.randomUUID(),
-                  x: 260 - pan.x / zoom,
-                  y: 220 - pan.y / zoom,
+                  id: `note-${crypto.randomUUID().slice(0, 8)}`,
+                  x: Math.round(240 + prev.length * 30 - pan.x / zoom),
+                  y: Math.round(160 + prev.length * 25 - pan.y / zoom),
                   text: 'Manh mối mới cần xác minh...',
                 },
               ])
@@ -170,13 +205,19 @@ export default function InfiniteCanvasView({
           </button>
 
           <div className="flex items-center gap-1 bg-[#F5EAD2] dark:bg-[#1E0505] border border-[#6E5332] px-1.5 py-1">
-            <button onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))} className="p-1">
+            <button
+              onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
+              className="p-1"
+            >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
             <span className="font-mono-tabular text-xs w-10 text-center">
               {Math.round(zoom * 100)}%
             </span>
-            <button onClick={() => setZoom((z) => Math.min(1.6, +(z + 0.1).toFixed(2)))} className="p-1">
+            <button
+              onClick={() => setZoom((z) => Math.min(1.6, +(z + 0.1).toFixed(2)))}
+              className="p-1"
+            >
               <ZoomIn className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -186,7 +227,10 @@ export default function InfiniteCanvasView({
       {/* Corkboard Infinite Stage */}
       <div
         onMouseDown={(e) => {
-          if (e.target === e.currentTarget || (e.target as HTMLElement).dataset.canvasBg === 'true') {
+          if (
+            e.target === e.currentTarget ||
+            (e.target as HTMLElement).dataset.canvasBg === 'true'
+          ) {
             panningRef.current = {
               startX: e.clientX,
               startY: e.clientY,
@@ -201,6 +245,19 @@ export default function InfiniteCanvasView({
         className="relative flex-1 overflow-hidden corkboard-surface cursor-grab active:cursor-grabbing select-none"
         data-canvas-bg="true"
       >
+        {visibleItems.length === 0 && notes.length === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center p-6">
+            <div className="p-5 manila-paper border-2 border-[#2A2018] hard-shadow max-w-md space-y-2">
+              <div className="font-typewriter text-sm font-bold uppercase text-[#9E1B16]">
+                Bảng Ghim Đang Trống
+              </div>
+              <p className="font-handwriting text-lg text-[#3A2E23] dark:text-[#FFD6CE]">
+                Chọn &ldquo;+ Ghim hồ sơ lên Bảng&rdquo; hoặc bấm &ldquo;Ghim Giấy Nhớ&rdquo; trên thanh công cụ để ghim chứng cứ và nối dây đỏ.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
@@ -209,35 +266,7 @@ export default function InfiniteCanvasView({
           className="absolute inset-0"
           data-canvas-bg="true"
         >
-          {/* Red Investigation Yarn Connectors */}
-          <svg className="absolute inset-0 w-[3000px] h-[3000px] pointer-events-none overflow-visible">
-            {connections.map((conn) => {
-              const p1 = positions[conn.fromId];
-              const p2 = positions[conn.toId];
-              if (!p1 || !p2) return null;
-              const x1 = p1.x + 128;
-              const y1 = p1.y + 12;
-              const x2 = p2.x + 128;
-              const y2 = p2.y + 12;
-              const midX = (x1 + x2) / 2;
-              const midY = Math.max(y1, y2) + 45;
-              return (
-                <g key={conn.id}>
-                  <path
-                    d={`M ${x1} ${y1} Q ${midX} ${midY} ${x2} ${y2}`}
-                    fill="none"
-                    stroke="#9E1B16"
-                    strokeWidth={2.6}
-                    strokeOpacity={0.9}
-                  />
-                  <circle cx={x1} cy={y1} r={4.5} fill="#9E1B16" stroke="#F5EAD2" strokeWidth={1.5} />
-                  <circle cx={x2} cy={y2} r={4.5} fill="#9E1B16" stroke="#F5EAD2" strokeWidth={1.5} />
-                </g>
-              );
-            })}
-          </svg>
-
-          {/* Pinned Evidence Cards (#46 Drag Lift & Curl) */}
+          {/* Pinned Evidence Cards */}
           {visibleItems.map((item, idx) => {
             const pos = positions[item.id];
             const isConnectingSource = connectSourceId === item.id;
@@ -245,7 +274,12 @@ export default function InfiniteCanvasView({
             return (
               <div
                 key={item.id}
-                style={{ left: pos.x, top: pos.y }}
+                style={{
+                  position: 'absolute',
+                  left: `${pos.x}px`,
+                  top: `${pos.y}px`,
+                  width: `${CARD_WIDTH}px`,
+                }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   if (connectSourceId) {
@@ -265,15 +299,21 @@ export default function InfiniteCanvasView({
                     origY: pos.y,
                   };
                 }}
-                className={`absolute w-64 manila-paper torn-paper-card border-2 p-3.5 cursor-move transition-transform ${
-                  isDragging ? 'rotate-2 -translate-y-1.5 scale-[1.03] z-30' : ''
+                className={`manila-paper border-2 pt-4 px-3.5 pb-3.5 cursor-move hard-shadow-lg transition-transform ${
+                  isDragging ? 'rotate-1 scale-[1.02] z-30' : 'z-10'
                 } ${
                   isConnectingSource
                     ? 'border-[#9E1B16] ring-2 ring-[#9E1B16]/50'
                     : 'border-[#2A2018] dark:border-[#9E1B16]'
                 }`}
               >
-                <div className="w-3.5 h-3.5 rounded-full bg-[#9E1B16] border-2 border-[#F5EAD2] shadow mx-auto -mt-5 mb-2" />
+                {/* 3D Pushpin attached directly to the top center edge of the card (y = pos.y, x = pos.x + 128) */}
+                <div
+                  className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-gradient-to-br from-[#D62828] to-[#7D1111] border-2 border-[#F5EAD2] shadow-[0_3px_5px_rgba(0,0,0,0.65)] flex items-center justify-center z-30"
+                  title="Đinh ghim hồ sơ"
+                >
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#FFE4DE]/80" />
+                </div>
 
                 {item.coverImage && (
                   <img
@@ -283,8 +323,19 @@ export default function InfiniteCanvasView({
                     className="w-full h-24 object-cover border border-[#2A2018] mb-2.5 pointer-events-none sepia-[0.2]"
                   />
                 )}
-                <div className="font-mono-tabular text-[10px] uppercase text-[#574A3D] dark:text-[#FF9E8E] mb-1">
-                  CAT. Nº AV-{idx + 1} · {item.type.toUpperCase()}
+                <div className="flex items-center justify-between font-mono-tabular text-[10px] uppercase text-[#574A3D] dark:text-[#FF9E8E] mb-1">
+                  <span>
+                    CAT. Nº AV-{idx + 1} · {item.type.toUpperCase()}
+                  </span>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => handleUnpinCard(item.id)}
+                    title="Gỡ khỏi bảng ghim"
+                    className="text-[#574A3D] hover:text-[#9E1B16]"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </div>
                 <h5 className="font-typewriter text-xs font-bold line-clamp-2 mb-1.5">
                   {item.title}
@@ -316,7 +367,12 @@ export default function InfiniteCanvasView({
             return (
               <div
                 key={note.id}
-                style={{ left: note.x, top: note.y }}
+                style={{
+                  position: 'absolute',
+                  left: `${note.x}px`,
+                  top: `${note.y}px`,
+                  width: `${NOTE_WIDTH}px`,
+                }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   setActiveDragId(note.id);
@@ -329,11 +385,24 @@ export default function InfiniteCanvasView({
                     origY: note.y,
                   };
                 }}
-                className={`absolute w-56 p-3 bg-[#F3DF98] text-[#1A120B] border border-[#8E762A] hard-shadow cursor-move transition-transform ${
-                  isDragging ? '-rotate-2 -translate-y-1.5 scale-[1.03] z-30' : 'rotate-1'
+                className={`pt-4 px-3 pb-3 bg-[#F3DF98] text-[#1A120B] border-2 border-[#8E762A] hard-shadow cursor-move transition-transform ${
+                  isDragging ? '-rotate-1 scale-[1.02] z-30' : 'rotate-1 z-10'
                 }`}
               >
-                <div className="w-3 h-3 rounded-full bg-[#9E1B16] border border-[#F5EAD2] mx-auto -mt-4 mb-1.5" />
+                {/* 3D Pushpin attached directly to the top center edge of the sticky note */}
+                <div className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-gradient-to-br from-[#D62828] to-[#7D1111] border-2 border-[#F5EAD2] shadow-[0_2px_4px_rgba(0,0,0,0.6)] z-30" />
+
+                <div className="flex justify-end mb-1">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => setNotes((prev) => prev.filter((n) => n.id !== note.id))}
+                    className="text-[#6E5332] hover:text-[#9E1B16]"
+                    title="Gỡ giấy nhớ"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
                 <textarea
                   value={note.text}
                   onMouseDown={(e) => e.stopPropagation()}
@@ -348,6 +417,42 @@ export default function InfiniteCanvasView({
               </div>
             );
           })}
+
+          {/* Red Investigation Yarn Connectors (Rendered on top at exact pushpin coordinates) */}
+          <svg className="absolute inset-0 w-[4000px] h-[4000px] pointer-events-none overflow-visible z-20">
+            {connections.map((conn) => {
+              const p1 = getPinPosition(conn.fromId);
+              const p2 = getPinPosition(conn.toId);
+              if (!p1 || !p2) return null;
+              const x1 = p1.x;
+              const y1 = p1.y;
+              const x2 = p2.x;
+              const y2 = p2.y;
+              const midX = (x1 + x2) / 2;
+              const midY = Math.max(y1, y2) + 38;
+              return (
+                <g key={conn.id}>
+                  {/* Subtle yarn drop shadow */}
+                  <path
+                    d={`M ${x1} ${y1 + 2} Q ${midX} ${midY + 4} ${x2} ${y2 + 2}`}
+                    fill="none"
+                    stroke="rgba(0,0,0,0.35)"
+                    strokeWidth={3}
+                  />
+                  {/* Red yarn tied directly from pushpin to pushpin */}
+                  <path
+                    d={`M ${x1} ${y1} Q ${midX} ${midY} ${x2} ${y2}`}
+                    fill="none"
+                    stroke="#9E1B16"
+                    strokeWidth={2.8}
+                    strokeLinecap="round"
+                  />
+                  <circle cx={x1} cy={y1} r={5} fill="#9E1B16" stroke="#F5EAD2" strokeWidth={1.8} />
+                  <circle cx={x2} cy={y2} r={5} fill="#9E1B16" stroke="#F5EAD2" strokeWidth={1.8} />
+                </g>
+              );
+            })}
+          </svg>
         </div>
       </div>
     </div>

@@ -1,0 +1,265 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBoundedStringList(arr, maxLen, maxStrLen) {
+      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= maxStrLen));
+    }
+
+    // Validation Blueprint: UserVaultState
+    function isValidUserVaultState(data, userId) {
+      let keys = [
+        'ownerId',
+        'displayName',
+        'expPoints',
+        'level',
+        'streakDays',
+        'readingMinutesToday',
+        'dailyGoalMinutes',
+        'earnedBadgeIds',
+        'hiddenWidgetIds',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidId(data.ownerId)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.expPoints is number && data.expPoints >= 0 && data.expPoints <= 10000000
+        && data.level is number && data.level >= 1 && data.level <= 10000
+        && data.streakDays is number && data.streakDays >= 0 && data.streakDays <= 100000
+        && data.readingMinutesToday is number && data.readingMinutesToday >= 0 && data.readingMinutesToday <= 14400
+        && data.dailyGoalMinutes is number && data.dailyGoalMinutes >= 1 && data.dailyGoalMinutes <= 1440
+        && isBoundedStringList(data.earnedBadgeIds, 10, 64)
+        && isBoundedStringList(data.hiddenWidgetIds, 10, 64)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: VaultItemRecord
+    function isValidVaultItemRecord(data, userId, itemId) {
+      let keys = [
+        'id',
+        'ownerId',
+        'workspaceId',
+        'title',
+        'type',
+        'smartFolder',
+        'tags',
+        'excerpt',
+        'content',
+        'sourceUrl',
+        'coverImage',
+        'mediaUrl',
+        'pdfDataBase64',
+        'ocrText',
+        'aiSummary',
+        'fileSizeLabel',
+        'pageCount',
+        'lastReadPage',
+        'readProgressPct',
+        'pinned',
+        'offlineCached',
+        'onCanvas',
+        'canvasX',
+        'canvasY',
+        'linkedIds',
+        'createdAtIso',
+        'updatedAtIso',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id == itemId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidId(data.ownerId)
+        && data.workspaceId is string && data.workspaceId in ['personal', 'design-lab', 'engineering']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.type is string && data.type in ['pdf', 'office_doc', 'web_archive', 'video', 'audio', 'note', 'image', 'model_3d']
+        && data.smartFolder is string && data.smartFolder.size() >= 1 && data.smartFolder.size() <= 120
+        && isBoundedStringList(data.tags, 10, 64)
+        && data.excerpt is string && data.excerpt.size() <= 500
+        && data.content is string && data.content.size() <= 200000
+        && data.sourceUrl is string && data.sourceUrl.size() <= 2000
+        && data.coverImage is string && data.coverImage.size() <= 500000
+        && data.mediaUrl is string && data.mediaUrl.size() <= 500000
+        && data.pdfDataBase64 is string && data.pdfDataBase64.size() <= 700000
+        && data.ocrText is string && data.ocrText.size() <= 100000
+        && data.aiSummary is string && data.aiSummary.size() <= 50000
+        && data.fileSizeLabel is string && data.fileSizeLabel.size() >= 1 && data.fileSizeLabel.size() <= 60
+        && data.pageCount is number && data.pageCount >= 0 && data.pageCount <= 10000
+        && data.lastReadPage is number && data.lastReadPage >= 0 && data.lastReadPage <= 10000
+        && data.readProgressPct is number && data.readProgressPct >= 0 && data.readProgressPct <= 100
+        && data.pinned is bool
+        && data.offlineCached is bool
+        && data.onCanvas is bool
+        && data.canvasX is number && data.canvasX >= -10000 && data.canvasX <= 10000
+        && data.canvasY is number && data.canvasY >= -10000 && data.canvasY <= 10000
+        && isBoundedStringList(data.linkedIds, 10, 128)
+        && data.createdAtIso is string && data.createdAtIso.size() >= 10 && data.createdAtIso.size() <= 40
+        && data.updatedAtIso is string && data.updatedAtIso.size() >= 10 && data.updatedAtIso.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: VaultCommentRecord
+    function isValidVaultCommentRecord(data, userId, commentId) {
+      let keys = [
+        'id',
+        'ownerId',
+        'itemId',
+        'author',
+        'text',
+        'createdAtIso',
+        'createdAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id == commentId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidId(data.ownerId)
+        && isValidId(data.itemId)
+        && data.author is string && data.author.size() >= 1 && data.author.size() <= 120
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 2000
+        && data.createdAtIso is string && data.createdAtIso.size() >= 10 && data.createdAtIso.size() <= 40
+        && data.createdAt is timestamp;
+    }
+
+    function parentUserExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId))
+        && get(/databases/$(database)/documents/users/$(userId)).data.ownerId == request.auth.uid;
+    }
+
+    // Collection: /users/{userId}
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserVaultState(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserVaultState(incoming(), userId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName',
+          'expPoints',
+          'level',
+          'streakDays',
+          'readingMinutesToday',
+          'dailyGoalMinutes',
+          'earnedBadgeIds',
+          'hiddenWidgetIds',
+          'updatedAt'
+        ]);
+
+      // Subcollection: /users/{userId}/items/{itemId}
+      match /items/{itemId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(itemId) && existing().ownerId == request.auth.uid && parentUserExists(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(itemId)
+          && isValidVaultItemRecord(incoming(), userId, itemId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentUserExists(userId);
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(itemId)
+          && isValidVaultItemRecord(incoming(), userId, itemId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().createdAtIso == existing().createdAtIso
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'workspaceId',
+            'title',
+            'type',
+            'smartFolder',
+            'tags',
+            'excerpt',
+            'content',
+            'sourceUrl',
+            'coverImage',
+            'mediaUrl',
+            'pdfDataBase64',
+            'ocrText',
+            'aiSummary',
+            'fileSizeLabel',
+            'pageCount',
+            'lastReadPage',
+            'readProgressPct',
+            'pinned',
+            'offlineCached',
+            'onCanvas',
+            'canvasX',
+            'canvasY',
+            'linkedIds',
+            'updatedAtIso',
+            'updatedAt'
+          ])
+          && parentUserExists(userId);
+        allow delete: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(itemId)
+          && existing().ownerId == request.auth.uid
+          && parentUserExists(userId);
+      }
+
+      // Subcollection: /users/{userId}/comments/{commentId}
+      match /comments/{commentId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(commentId) && existing().ownerId == request.auth.uid && parentUserExists(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(commentId)
+          && isValidVaultCommentRecord(incoming(), userId, commentId)
+          && incoming().createdAt == request.time
+          && parentUserExists(userId)
+          && exists(/databases/$(database)/documents/users/$(userId)/items/$(incoming().itemId));
+        allow delete: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(commentId)
+          && existing().ownerId == request.auth.uid
+          && parentUserExists(userId);
+      }
+    }
+  }
+}

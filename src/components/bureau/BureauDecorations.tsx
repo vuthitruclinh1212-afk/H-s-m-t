@@ -488,16 +488,27 @@ export function VietnameseTypographyModal({
   );
 }
 
-// #56: Top Secret Login Closed Folder Cover Gate
-export function TopSecretLoginGate({ onUnlock }: { onUnlock: () => void }) {
+// #56: Top Secret Login Closed Folder Cover Gate with Real Google Authentication
+export function TopSecretLoginGate({
+  onUnlock,
+  isAuthenticating = false,
+  authError = null,
+}: {
+  onUnlock: () => Promise<void> | void;
+  isAuthenticating?: boolean;
+  authError?: string | null;
+}) {
   const [opening, setOpening] = useState(false);
 
-  const handleOpen = () => {
+  const handleOpen = async () => {
+    if (isAuthenticating) return;
     playStampThud();
-    setOpening(true);
-    setTimeout(() => {
-      onUnlock();
-    }, 460);
+    try {
+      await onUnlock();
+      setOpening(true);
+    } catch {
+      setOpening(false);
+    }
   };
 
   return (
@@ -505,23 +516,25 @@ export function TopSecretLoginGate({ onUnlock }: { onUnlock: () => void }) {
       <DeskBackgroundDecor />
 
       {/* Two Folder Wings that split open (#20, #56) */}
-      <div className="relative w-full max-w-xl h-[440px] flex overflow-hidden border-2 border-[#2A2018] hard-shadow-lg">
+      <div className="relative w-full max-w-2xl min-h-[460px] flex overflow-hidden border-2 border-[#2A2018] hard-shadow-lg">
         <div
-          className={`w-1/2 h-full manila-paper border-r border-[#8C7659] p-6 flex flex-col justify-between ${
+          className={`w-1/2 manila-paper border-r border-[#8C7659] p-6 flex flex-col justify-between ${
             opening ? 'wing-left-open' : ''
           }`}
         >
           <div className="font-cipher text-[11px] uppercase tracking-widest text-[#574A3D] dark:text-[#FF9E8E]">
-            BIỂU MẪU SC-029 · LƯU TRỮ 1936
+            BIỂU MẪU SC-029 · ĐỒNG BỘ ĐA THIẾT BỊ
           </div>
-          <div className="space-y-2">
-            <span className="stamp-crimson text-sm font-bold">TUYỆT MẬT</span>
-            <p className="font-handwriting text-2xl text-[#2A2018] dark:text-[#FFD6CE]">
-              Chỉ dành cho Thanh tra được ủy quyền.
+          <div className="space-y-3">
+            <span className="stamp-crimson text-sm font-bold">ĐỊNH DANH CÁ NHÂN</span>
+            <p className="font-handwriting text-xl text-[#2A2018] dark:text-[#FFD6CE] leading-snug">
+              Mỗi địa chỉ Email tương ứng với 1 Kho Lưu Trữ độc lập trên đám mây.
             </p>
-            <p className="font-signature text-xl text-[#9E1B16] dark:text-[#FF6B5B]">
-              Ký duyệt: Thanh tra Minh Nguyễn
-            </p>
+            <ul className="font-typewriter text-[11px] text-[#3A2E23] dark:text-[#FF9E8E] space-y-1.5">
+              <li>• Tự động lưu trữ khi đăng xuất</li>
+              <li>• Chống ghi đè khi đăng nhập lại</li>
+              <li>• Đăng nhập cùng tài khoản trên nhiều thiết bị</li>
+            </ul>
           </div>
           <div className="font-typewriter text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
             CỤC LƯU TRỮ & TÌNH BÁO HỒ SƠ
@@ -529,23 +542,35 @@ export function TopSecretLoginGate({ onUnlock }: { onUnlock: () => void }) {
         </div>
 
         <div
-          className={`w-1/2 h-full manila-paper p-6 flex flex-col justify-between items-end text-right ${
+          className={`w-1/2 manila-paper p-6 flex flex-col justify-between items-end text-right ${
             opening ? 'wing-right-open' : ''
           }`}
         >
           <div className="font-stamp text-xs uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
-            CHỈ XEM TẠI PHÒNG MẬT
+            XÁC THỰC TÀI KHOẢN GOOGLE
           </div>
           <div className="space-y-4">
             <h1 className="font-dossier text-2xl sm:text-3xl font-extrabold leading-tight">
               HỒ SƠ MẬT AETHEL BUREAU
             </h1>
-            <RubberStampButton onClick={handleOpen} stampWord="ĐÃ XÁC THỰC">
-              MỞ BÌA HỒ SƠ
+            <p className="font-serif-editorial text-xs text-[#574A3D] dark:text-[#FF9E8E]">
+              Đăng nhập bằng Google để mở kho lưu trữ cá nhân hoặc khôi phục hồ sơ đã lưu từ các phiên trước.
+            </p>
+            {authError && (
+              <div className="p-2 bg-[#9E1B16]/15 border border-[#9E1B16] font-typewriter text-[11px] text-[#9E1B16] text-left">
+                {authError}
+              </div>
+            )}
+            <RubberStampButton
+              disabled={isAuthenticating}
+              onClick={handleOpen}
+              stampWord="ĐANG XÁC THỰC"
+            >
+              {isAuthenticating ? 'ĐANG KẾT NỐI ĐÁM MÂY...' : 'ĐĂNG NHẬP TÀI KHOẢN GOOGLE'}
             </RubberStampButton>
           </div>
           <div className="font-cipher text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
-            CẤP ĐỘ BẢO MẬT: CẤP IV
+            1 EMAIL = 1 KHO LƯU TRỮ DUY NHẤT
           </div>
         </div>
 
@@ -553,15 +578,23 @@ export function TopSecretLoginGate({ onUnlock }: { onUnlock: () => void }) {
         {!opening && (
           <button
             onClick={handleOpen}
-            aria-label="Phá niêm phong hồ sơ"
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 rounded-full bg-[#8E1B16] border-4 border-[#5C100C] text-[#F5EAD2] font-stamp text-[10px] tracking-widest uppercase shadow-[3px_5px_0px_rgba(14,9,5,0.6)] hover:scale-105 transition-transform flex items-center justify-center text-center leading-tight"
+            disabled={isAuthenticating}
+            aria-label="Đăng nhập mở niêm phong hồ sơ"
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 rounded-full bg-[#8E1B16] border-4 border-[#5C100C] text-[#F5EAD2] font-stamp text-[10px] tracking-widest uppercase shadow-[3px_5px_0px_rgba(14,9,5,0.6)] hover:scale-105 transition-transform flex items-center justify-center text-center leading-tight disabled:opacity-50"
           >
-            NIÊM PHONG
-            <br />
-            MẬT
+            {isAuthenticating ? (
+              'ĐANG MỞ...'
+            ) : (
+              <>
+                NIÊM PHONG
+                <br />
+                MẬT
+              </>
+            )}
           </button>
         )}
       </div>
     </div>
   );
 }
+

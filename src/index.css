@@ -256,8 +256,11 @@
 }
 
 /* #5: Torn Jagged Paper & Dog-ear Folded Corner */
-.torn-paper-card {
+:where(.torn-paper-card) {
   position: relative;
+}
+
+.torn-paper-card {
   border-radius: 0 !important;
   box-shadow: 5px 6px 0px rgba(14, 9, 5, 0.52);
   clip-path: polygon(

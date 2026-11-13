@@ -1,0 +1,358 @@
+{
+  "entities": {
+    "UserVaultState": {
+      "title": "UserVaultState",
+      "description": "Per-user workspace configuration, habit progress, and dashboard preferences using native Firestore types.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "The UID of the authenticated owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Investigator display name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "expPoints": {
+          "type": "number",
+          "description": "Total investigation experience points."
+        },
+        "level": {
+          "type": "number",
+          "description": "Investigator rank level."
+        },
+        "streakDays": {
+          "type": "number",
+          "description": "Consecutive duty days."
+        },
+        "readingMinutesToday": {
+          "type": "number",
+          "description": "Minutes logged today."
+        },
+        "dailyGoalMinutes": {
+          "type": "number",
+          "description": "Daily target reading minutes."
+        },
+        "earnedBadgeIds": {
+          "type": "array",
+          "description": "Bounded list of earned badge IDs (max 10)."
+        },
+        "hiddenWidgetIds": {
+          "type": "array",
+          "description": "Bounded list of hidden widget IDs (max 10)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user vault was initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user vault was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "displayName",
+        "expPoints",
+        "level",
+        "streakDays",
+        "readingMinutesToday",
+        "dailyGoalMinutes",
+        "earnedBadgeIds",
+        "hiddenWidgetIds",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultItemRecord": {
+      "title": "VaultItemRecord",
+      "description": "An individual dossier, PDF, note, web archive, or media exhibit owned by a specific user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique item identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who owns this item.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "description": "Workspace category ID.",
+          "enum": [
+            "personal",
+            "design-lab",
+            "engineering"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "description": "Dossier title.",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "type": {
+          "type": "string",
+          "description": "VaultItemType category.",
+          "enum": [
+            "pdf",
+            "office_doc",
+            "web_archive",
+            "video",
+            "audio",
+            "note",
+            "image",
+            "model_3d"
+          ]
+        },
+        "smartFolder": {
+          "type": "string",
+          "description": "Smart folder label.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "tags": {
+          "type": "array",
+          "description": "Bounded list of tags (max 10)."
+        },
+        "excerpt": {
+          "type": "string",
+          "description": "Short summary excerpt.",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "content": {
+          "type": "string",
+          "description": "Main text/markdown content.",
+          "minLength": 0,
+          "maxLength": 200000
+        },
+        "sourceUrl": {
+          "type": "string",
+          "description": "Source URL if clipped.",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "coverImage": {
+          "type": "string",
+          "description": "Cover image URL or data URI.",
+          "minLength": 0,
+          "maxLength": 500000
+        },
+        "mediaUrl": {
+          "type": "string",
+          "description": "Media URL or data URI.",
+          "minLength": 0,
+          "maxLength": 500000
+        },
+        "pdfDataBase64": {
+          "type": "string",
+          "description": "Base64 PDF data (bounded under 700KB for Firestore document limit).",
+          "minLength": 0,
+          "maxLength": 700000
+        },
+        "ocrText": {
+          "type": "string",
+          "description": "Extracted AI OCR text.",
+          "minLength": 0,
+          "maxLength": 100000
+        },
+        "aiSummary": {
+          "type": "string",
+          "description": "Generated AI summary text.",
+          "minLength": 0,
+          "maxLength": 50000
+        },
+        "fileSizeLabel": {
+          "type": "string",
+          "description": "Formatted file size label.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "pageCount": {
+          "type": "number",
+          "description": "Total pages if PDF."
+        },
+        "lastReadPage": {
+          "type": "number",
+          "description": "Last read page number."
+        },
+        "readProgressPct": {
+          "type": "number",
+          "description": "Read progress percentage 0-100."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Whether pinned as urgent."
+        },
+        "offlineCached": {
+          "type": "boolean",
+          "description": "Whether cached in IndexedDB."
+        },
+        "onCanvas": {
+          "type": "boolean",
+          "description": "Whether pinned on corkboard canvas."
+        },
+        "canvasX": {
+          "type": "number",
+          "description": "X coordinate on corkboard."
+        },
+        "canvasY": {
+          "type": "number",
+          "description": "Y coordinate on corkboard."
+        },
+        "linkedIds": {
+          "type": "array",
+          "description": "Bounded list of linked item IDs (max 10)."
+        },
+        "createdAtIso": {
+          "type": "string",
+          "description": "ISO timestamp string.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "updatedAtIso": {
+          "type": "string",
+          "description": "ISO timestamp string.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "workspaceId",
+        "title",
+        "type",
+        "smartFolder",
+        "tags",
+        "excerpt",
+        "content",
+        "sourceUrl",
+        "coverImage",
+        "mediaUrl",
+        "pdfDataBase64",
+        "ocrText",
+        "aiSummary",
+        "fileSizeLabel",
+        "pageCount",
+        "lastReadPage",
+        "readProgressPct",
+        "pinned",
+        "offlineCached",
+        "onCanvas",
+        "canvasX",
+        "canvasY",
+        "linkedIds",
+        "createdAtIso",
+        "updatedAtIso",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultCommentRecord": {
+      "title": "VaultCommentRecord",
+      "description": "An investigation note/comment attached to a vault item.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Comment ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "itemId": {
+          "type": "string",
+          "description": "ID of the VaultItemRecord.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "author": {
+          "type": "string",
+          "description": "Author display name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "text": {
+          "type": "string",
+          "description": "Comment content.",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "createdAtIso": {
+          "type": "string",
+          "description": "ISO timestamp string for UI display.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "itemId",
+        "author",
+        "text",
+        "createdAtIso",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserVaultState"
+      },
+      "description": "Per-user vault configuration and state document."
+    },
+    "/users/{userId}/items/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/VaultItemRecord"
+      },
+      "description": "Subcollection of vault items belonging exclusively to userId."
+    },
+    "/users/{userId}/comments/{commentId}": {
+      "schema": {
+        "$ref": "#/entities/VaultCommentRecord"
+      },
+      "description": "Subcollection of item comments belonging exclusively to userId."
+    }
+  }
+}
