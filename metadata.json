@@ -1,0 +1,6 @@
+{
+  "name": "AethelVault — Kho Lưu Trữ Vạn Năng & Second Brain",
+  "description": "Siêu ứng dụng lưu trữ tài liệu PDF Flipbook 3D, Web Archive, Video Timestamp, Bản đồ tri thức Knowledge Graph, Bảng trắng vô cực và Kho mã hóa E2EE.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

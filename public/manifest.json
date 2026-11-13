@@ -1,0 +1,16 @@
+{
+  "name": "AethelVault — Kho Lưu Trữ Vạn Năng",
+  "short_name": "AethelVault",
+  "description": "Kho lưu trữ tài liệu PDF Flipbook 3D, Web Archive, Video Timestamp, Bản đồ tri thức & Kho mã hóa E2EE.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/vault-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
