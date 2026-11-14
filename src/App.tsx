@@ -3,9 +3,12 @@ import { onAuthStateChanged } from 'firebase/auth';
 import {
   ArrowLeft,
   Award,
+  BookmarkPlus,
   Camera,
   CloudCheck,
+  ExternalLink,
   Folder,
+  Globe,
   HardDriveDownload,
   LayoutGrid,
   LogOut,
@@ -17,6 +20,7 @@ import {
   Search,
   Share2,
   Shield,
+  Tag,
   Trash2,
   Type,
   X,
@@ -71,7 +75,6 @@ import {
   updateVaultItemInCloud,
 } from '@/src/utils/cloudVaultSync';
 import {
-  BaggageTag,
   BureauPocketWatch,
   DeskBackgroundDecor,
   EmptyAshtrayState,
@@ -95,6 +98,7 @@ import QuickClipperModal from '@/src/components/modals/QuickClipperModal';
 import SemanticSearchModal from '@/src/components/modals/SemanticSearchModal';
 import SelfDestructShareModal from '@/src/components/modals/SelfDestructShareModal';
 import CustomDashboardView from '@/src/components/dashboard/CustomDashboardView';
+import { CustomTagEditor } from '@/src/components/bureau/CustomTagManager';
 
 const WORKSPACES: Array<{ id: WorkspaceId; label: string }> = [
   { id: 'personal', label: 'Kho Thám Tử Cá Nhân' },
@@ -104,17 +108,18 @@ const WORKSPACES: Array<{ id: WorkspaceId; label: string }> = [
 
 const SMART_FOLDERS = [
   'Tất cả',
+  'Trang Web Thường Tới',
+  'Tài liệu PDF',
+  'Ghi chú Cá nhân',
   'Kiến trúc & Hệ thống',
   'Nghiên cứu AI',
-  'Tài liệu PDF',
   'Tư liệu Media',
-  'Ghi chú Cá nhân',
 ];
 
 const TYPE_LABEL: Record<VaultItemType, string> = {
   pdf: 'Hồ sơ PDF',
   office_doc: 'Sổ cái / Office',
-  web_archive: 'Lưu trữ Báo / Web',
+  web_archive: 'Trang Web / Báo',
   video: 'Băng CCTV / Video',
   audio: 'Băng Ghi âm',
   note: 'Sổ tay Điều tra',
@@ -154,9 +159,13 @@ export default function App() {
   const [activeFolder, setActiveFolder] = useState<string>('Tất cả');
   const [typeFilter, setTypeFilter] = useState<'all' | VaultItemType>('all');
 
-  // Binder Clip Priority Filter, Date Stamp Filter & Polaroid Gallery Mode
+  // Binder Clip Priority Filter, Date Stamp Filter, Tag Filter & Keyword Search
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'pinned' | 'standard'>('all');
   const [dateFilter, setDateFilter] = useState<string>('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [catalogQuery, setCatalogQuery] = useState<string>('');
+  const [inlineTagItemId, setInlineTagItemId] = useState<string | null>(null);
+  const [inlineTagValue, setInlineTagValue] = useState<string>('');
   const [polaroidMode, setPolaroidMode] = useState<boolean>(false);
   const [crumplingId, setCrumplingId] = useState<string | null>(null);
 
@@ -181,6 +190,7 @@ export default function App() {
   const [comments, setComments] = useState<CollaborativeComment[]>(INITIAL_COMMENTS);
 
   const [clipperOpen, setClipperOpen] = useState(false);
+  const [clipperInitialTab, setClipperInitialTab] = useState<'bookmark' | 'file'>('bookmark');
   const [searchOpen, setSearchOpen] = useState(false);
   const [splitMergeOpen, setSplitMergeOpen] = useState(false);
   const [typoModalOpen, setTypoModalOpen] = useState(false);
@@ -519,11 +529,55 @@ export default function App() {
     [items, activeItemId]
   );
 
+  // All custom tags created across the user's vault with counts
+  const allVaultTagsWithCounts = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>();
+    items.forEach((it) => {
+      (it.tags || []).forEach((rawTag) => {
+        const clean = rawTag.trim();
+        if (!clean) return;
+        const key = clean.toLowerCase();
+        const existing = counts.get(key);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          counts.set(key, { label: clean, count: 1 });
+        }
+      });
+    });
+    return Array.from(counts.values()).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [items]);
+
+  const existingVaultTags = useMemo(
+    () => allVaultTagsWithCounts.map((t) => t.label),
+    [allVaultTagsWithCounts]
+  );
+
+  const toggleTagFilter = (tagLabel: string) => {
+    playDateClick();
+    setSelectedTags((prev) => {
+      const exists = prev.some((t) => t.toLowerCase() === tagLabel.toLowerCase());
+      if (exists) {
+        return prev.filter((t) => t.toLowerCase() !== tagLabel.toLowerCase());
+      }
+      return [...prev, tagLabel];
+    });
+  };
+
   const filteredItems = useMemo(() => {
+    const q = catalogQuery.trim().toLowerCase();
     return items
       .filter((it) => {
         if (activeWorkspace !== 'all' && it.workspaceId !== activeWorkspace) return false;
-        if (activeFolder !== 'Tất cả' && it.smartFolder !== activeFolder) return false;
+        if (activeFolder !== 'Tất cả') {
+          if (activeFolder === 'Trang Web Thường Tới') {
+            if (it.smartFolder !== 'Trang Web Thường Tới' && it.type !== 'web_archive') {
+              return false;
+            }
+          } else if (it.smartFolder !== activeFolder) {
+            return false;
+          }
+        }
         if (typeFilter !== 'all' && it.type !== typeFilter) return false;
         if (priorityFilter === 'pinned' && !it.pinned) return false;
         if (priorityFilter === 'standard' && it.pinned) return false;
@@ -534,10 +588,39 @@ export default function App() {
         ) {
           return false;
         }
+        if (selectedTags.length > 0) {
+          const itemTagSet = new Set((it.tags || []).map((t) => t.toLowerCase()));
+          const matchesAllSelected = selectedTags.every((sel) =>
+            itemTagSet.has(sel.toLowerCase())
+          );
+          if (!matchesAllSelected) return false;
+        }
+        if (q) {
+          const hay = [
+            it.title,
+            it.excerpt,
+            it.content,
+            it.sourceUrl || '',
+            it.smartFolder,
+            ...(it.tags || []),
+          ]
+            .join(' ')
+            .toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
         return true;
       })
       .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
-  }, [items, activeWorkspace, activeFolder, typeFilter, priorityFilter, dateFilter]);
+  }, [
+    items,
+    activeWorkspace,
+    activeFolder,
+    typeFilter,
+    priorityFilter,
+    dateFilter,
+    selectedTags,
+    catalogQuery,
+  ]);
 
   const allPdfs = useMemo(() => items.filter((it) => it.type === 'pdf'), [items]);
 
@@ -703,13 +786,63 @@ export default function App() {
                       }`}
                     >
                       <span className="flex items-center gap-2 truncate">
-                        <Folder className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                        {folder === 'Trang Web Thường Tới' ? (
+                          <Globe className="w-3.5 h-3.5 shrink-0 text-[#9E1B16] dark:text-[#FF6B5B]" />
+                        ) : (
+                          <Folder className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                        )}
                         <span className="truncate">{folder}</span>
                       </span>
                     </button>
                   );
                 })}
               </div>
+
+              {allVaultTagsWithCounts.length > 0 && (
+                <>
+                  <div className="masking-tape-divider" />
+                  <div className="space-y-1.5">
+                    <div className="px-2 flex items-center justify-between font-typewriter text-[10px] uppercase tracking-widest text-[#574A3D] dark:text-[#FF9E8E]">
+                      <span>Lọc Theo Tag Của Bạn</span>
+                      {selectedTags.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTags([])}
+                          className="text-[#9E1B16] hover:underline"
+                        >
+                          Xóa lọc
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1 px-1">
+                      {allVaultTagsWithCounts.map((t) => {
+                        const isTagSelected = selectedTags.some(
+                          (s) => s.toLowerCase() === t.label.toLowerCase()
+                        );
+                        return (
+                          <button
+                            key={t.label}
+                            type="button"
+                            onClick={() => {
+                              setActiveItemId(null);
+                              setNavSection('library');
+                              toggleTagFilter(t.label);
+                              setSidebarOpen(false);
+                            }}
+                            className={`px-2 py-0.5 text-[10px] font-stamp uppercase border transition-colors ${
+                              isTagSelected
+                                ? 'bg-[#9E1B16] text-[#F5EAD2] border-[#2A2018]'
+                                : 'bg-[#F5EAD2] dark:bg-[#1E0505] border-[#6E5332] hover:bg-[#DFC79C]'
+                            }`}
+                          >
+                            #{t.label} ({t.count})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
             </nav>
 
             {/* Footer Account Profile & Cloud Sync Status */}
@@ -877,10 +1010,28 @@ export default function App() {
                 <span className="hidden xl:inline">Đăng xuất</span>
               </button>
 
-              <RubberStampButton onClick={() => setClipperOpen(true)} stampWord="INTAKE">
+              <button
+                onClick={() => {
+                  setClipperInitialTab('bookmark');
+                  setClipperOpen(true);
+                }}
+                title="Lưu trang web bạn thường xuyên lui tới (kèm ảnh Ctrl+V, mô tả và gắn Tag tự do)"
+                className="flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#2A2018] bg-[#EBDAB9] dark:bg-[#2B0909] hover:bg-[#DFC79C] text-xs font-stamp uppercase tracking-wider whitespace-nowrap hard-shadow"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5 text-[#9E1B16]" />
+                <span>+ Lưu Trang Web</span>
+              </button>
+
+              <RubberStampButton
+                onClick={() => {
+                  setClipperInitialTab('file');
+                  setClipperOpen(true);
+                }}
+                stampWord="INTAKE"
+              >
                 <span className="inline-flex items-center gap-1">
                   <Plus className="w-3.5 h-3.5" />
-                  Nạp Chứng Cứ
+                  Nạp Tài Liệu
                 </span>
               </RubberStampButton>
             </div>
@@ -986,10 +1137,18 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="stamp-crimson text-[10px] hidden sm:inline-block">
-                      HỒ SƠ ĐANG MỞ
-                    </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {activeItem.sourceUrl && (
+                      <a
+                        href={activeItem.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#9E1B16] hover:bg-[#C81E1E] text-[#F5EAD2] border border-[#2A2018] text-xs font-stamp uppercase tracking-wider"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Mở Trang Web
+                      </a>
+                    )}
                     <button
                       onClick={() => setShareTargetItem(activeItem)}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-[#F5EAD2] dark:bg-[#1E0505] border border-[#2A2018] text-xs font-typewriter uppercase hover:bg-[#DFC79C]"
@@ -998,6 +1157,20 @@ export default function App() {
                       Link Tự Hủy
                     </button>
                   </div>
+                </div>
+
+                {/* Universal Custom Tag Editor Bar for ANY open item (PDF, Video, Website, Note, etc.) */}
+                <div className="p-3.5 manila-paper border-2 border-[#2A2018] dark:border-[#9E1B16] space-y-2">
+                  <div className="font-stamp text-xs uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
+                    GẮN TAG TỰ DO CHO MỤC NÀY (ÁP DỤNG CHO CẢ TÀI LIỆU PDF, VIDEO & TRANG WEB)
+                  </div>
+                  <CustomTagEditor
+                    tags={activeItem.tags}
+                    onChangeTags={(nextTags) =>
+                      updateItemById(activeItem.id, { tags: nextTags })
+                    }
+                    existingVaultTags={existingVaultTags}
+                  />
                 </div>
 
                 {activeItem.type === 'pdf' ? (
@@ -1031,6 +1204,7 @@ export default function App() {
                   <UniversalItemViewer
                     item={activeItem}
                     comments={comments.filter((c) => c.itemId === activeItem.id)}
+                    existingVaultTags={existingVaultTags}
                     onUpdateItem={(patch) => updateItemById(activeItem.id, patch)}
                     onAddComment={(text) => {
                       const newComment: CollaborativeComment = {
@@ -1061,6 +1235,10 @@ export default function App() {
                 onUpdateWidgets={setWidgets}
                 onOpenItem={(it) => openItem(it)}
                 onOpenHabits={() => switchSection('habits')}
+                onOpenAddWebsite={() => {
+                  setClipperInitialTab('bookmark');
+                  setClipperOpen(true);
+                }}
               />
             ) : navSection === 'graph' ? (
               <KnowledgeGraphView
@@ -1102,7 +1280,7 @@ export default function App() {
                 onLogMinutes={handleLogMinutes}
               />
             ) : (
-              /* EVIDENCE & DOSSIER CATALOG */
+              /* EVIDENCE, FREQUENT WEBSITES & DOSSIER CATALOG */
               <div className="space-y-5">
                 <div className="p-5 manila-paper torn-paper-card border-2 border-[#2A2018] dark:border-[#9E1B16] space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1111,11 +1289,25 @@ export default function App() {
                         DANH MỤC LƯU TRỮ CÁ NHÂN · {currentUser.email}
                       </div>
                       <h1 className="font-typewriter text-2xl font-bold tracking-tight">
-                        Kho Hồ Sơ & Vật Chứng Cục Lưu Trữ
+                        {activeFolder === 'Trang Web Thường Tới' || typeFilter === 'web_archive'
+                          ? 'Sổ Địa Chỉ Trang Web Thường Xuyên Lui Tới'
+                          : 'Kho Hồ Sơ, Tài Liệu & Trang Web Thường Tới'}
                       </h1>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setClipperInitialTab('bookmark');
+                          setClipperOpen(true);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-[#9E1B16] hover:bg-[#C81E1E] text-[#F5EAD2] border-2 border-[#2A2018] text-xs font-stamp uppercase tracking-wider hard-shadow"
+                      >
+                        <BookmarkPlus className="w-3.5 h-3.5" />
+                        + Lưu Trang Web Mới
+                      </button>
+
                       <RollingDateStamp value={dateFilter} onChange={setDateFilter} />
                       {dateFilter && (
                         <button
@@ -1139,18 +1331,107 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Direct Search Bar & Free-form Tag Filter Bar */}
+                  <div className="p-3.5 bg-[#F5EAD2] dark:bg-[#1E0505] border border-[#6E5332] space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative flex-1 min-w-[220px]">
+                        <Search className="w-4 h-4 text-[#9E1B16] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={catalogQuery}
+                          onChange={(e) => setCatalogQuery(e.target.value)}
+                          placeholder="Tìm nhanh theo tên trang web, URL, mô tả, nội dung tài liệu hoặc #tag..."
+                          className="w-full pl-9 pr-8 py-2 text-xs font-typewriter border border-[#6E5332] bg-[#FAF3E3] dark:bg-[#240606] focus:outline-none focus:border-[#9E1B16]"
+                        />
+                        {catalogQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setCatalogQuery('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#574A3D] hover:text-[#9E1B16]"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {(selectedTags.length > 0 ||
+                        catalogQuery ||
+                        typeFilter !== 'all' ||
+                        activeFolder !== 'Tất cả') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTags([]);
+                            setCatalogQuery('');
+                            setTypeFilter('all');
+                            setActiveFolder('Tất cả');
+                          }}
+                          className="px-3 py-2 text-xs font-typewriter border border-[#9E1B16] text-[#9E1B16] bg-[#FAF3E3] hover:bg-[#9E1B16] hover:text-white transition-colors"
+                        >
+                          Xóa tất cả bộ lọc
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Tag Filter Chips */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 font-stamp text-[11px] uppercase text-[#9E1B16] dark:text-[#FF6B5B] mr-1">
+                        <Tag className="w-3.5 h-3.5" />
+                        Lọc theo Tag ({allVaultTagsWithCounts.length}):
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTags([])}
+                        className={`px-2.5 py-0.5 text-[11px] font-stamp uppercase border transition-colors ${
+                          selectedTags.length === 0
+                            ? 'bg-[#2A2018] text-[#F5EAD2] border-[#2A2018]'
+                            : 'bg-[#FAF3E3] dark:bg-[#240606] border-[#6E5332] hover:bg-[#DFC79C]'
+                        }`}
+                      >
+                        Tất cả Tag
+                      </button>
+
+                      {allVaultTagsWithCounts.map((tagObj) => {
+                        const isSelected = selectedTags.some(
+                          (s) => s.toLowerCase() === tagObj.label.toLowerCase()
+                        );
+                        return (
+                          <button
+                            key={tagObj.label}
+                            type="button"
+                            onClick={() => toggleTagFilter(tagObj.label)}
+                            className={`px-2.5 py-0.5 text-[11px] font-stamp uppercase border transition-colors ${
+                              isSelected
+                                ? 'bg-[#9E1B16] text-[#F5EAD2] border-[#2A2018] shadow-sm'
+                                : 'bg-[#DFC79C] dark:bg-[#3D0D0D] border-[#6E5332] hover:border-[#9E1B16]'
+                            }`}
+                          >
+                            #{tagObj.label} ({tagObj.count})
+                          </button>
+                        );
+                      })}
+
+                      {allVaultTagsWithCounts.length === 0 && (
+                        <span className="font-typewriter text-[11px] text-[#574A3D] dark:text-[#FF9E8E] italic">
+                          Khi bạn gắn Tag cho trang web hoặc tài liệu, các Tag sẽ xuất hiện tại đây để lọc 1-click.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="masking-tape-divider" />
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-1">
                       {(
                         [
-                          { id: 'all', label: 'Tất cả' },
+                          { id: 'all', label: 'Tất cả Mục' },
+                          { id: 'web_archive', label: '🌐 Trang Web Thường Tới' },
                           { id: 'pdf', label: 'Hồ sơ PDF' },
-                          { id: 'web_archive', label: 'Báo / Web' },
-                          { id: 'video', label: 'CCTV / Video' },
                           { id: 'note', label: 'Sổ tay' },
                           { id: 'image', label: 'Ảnh Chứng cứ' },
+                          { id: 'video', label: 'CCTV / Video' },
                           { id: 'office_doc', label: 'Sổ cái' },
                           { id: 'model_3d', label: '3D Pháp y' },
                         ] as const
@@ -1176,7 +1457,7 @@ export default function App() {
                       {(
                         [
                           { id: 'all', label: 'Tất cả', clipColor: 'bg-[#2A2018]' },
-                          { id: 'pinned', label: 'Khẩn cấp', clipColor: 'bg-[#9E1B16]' },
+                          { id: 'pinned', label: 'Ghim ưu tiên', clipColor: 'bg-[#9E1B16]' },
                           { id: 'standard', label: 'Thường', clipColor: 'bg-[#C69C4B]' },
                         ] as const
                       ).map((p) => (
@@ -1200,7 +1481,12 @@ export default function App() {
                 </div>
 
                 {filteredItems.length === 0 ? (
-                  <EmptyAshtrayState onAction={() => setClipperOpen(true)} />
+                  <EmptyAshtrayState
+                    onAction={() => {
+                      setClipperInitialTab('bookmark');
+                      setClipperOpen(true);
+                    }}
+                  />
                 ) : (
                   <div
                     className={`grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 ${
@@ -1237,15 +1523,15 @@ export default function App() {
                             onClick={(e) => toggleBinderPin(e, item)}
                             title={
                               item.pinned
-                                ? 'Kẹp Đỏ: Khẩn cấp (Nhấn để đổi)'
-                                : 'Kẹp Đồng: Thường (Nhấn để gắn Khẩn cấp)'
+                                ? 'Kẹp Đỏ: Ghim Ưu Tiên (Nhấn để đổi)'
+                                : 'Kẹp Đồng: Thường (Nhấn để ghim ưu tiên)'
                             }
                             className={`absolute -top-2.5 left-4 px-2 py-0.5 border border-[#1A120B] text-[9px] font-stamp uppercase text-[#F5EAD2] z-10 flex items-center gap-1 shadow-sm ${
                               item.pinned ? 'bg-[#9E1B16]' : 'bg-[#7A5E35]'
                             }`}
                           >
                             <Paperclip className="w-2.5 h-2.5" />
-                            {item.pinned ? 'KHẨN' : 'LƯU'}
+                            {item.pinned ? 'ƯU TIÊN' : 'LƯU'}
                           </button>
 
                           <div
@@ -1270,7 +1556,7 @@ export default function App() {
                                 src={item.coverImage}
                                 alt={item.title}
                                 referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover sepia-[0.22] group-hover:scale-[1.03] transition-transform duration-200"
+                                className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-200"
                               />
                             </div>
                           ) : null}
@@ -1281,9 +1567,23 @@ export default function App() {
                                 <span className={`${itemTypo.metaClass} opacity-75 truncate`}>
                                   {item.smartFolder} · {item.fileSizeLabel}
                                 </span>
-                                <span className="px-1.5 py-0.5 bg-[#2A2018]/10 dark:bg-[#9E1B16]/25 border border-[#6E5332]/60 font-cipher text-[9px] uppercase shrink-0">
-                                  {itemTypo.badgeFontName}
-                                </span>
+                                {item.sourceUrl ? (
+                                  <a
+                                    href={item.sourceUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#9E1B16] hover:bg-[#C81E1E] text-[#F5EAD2] font-stamp text-[10px] uppercase tracking-wider shrink-0"
+                                    title={`Mở trực tiếp: ${item.sourceUrl}`}
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                    Mở Web
+                                  </a>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 bg-[#2A2018]/10 dark:bg-[#9E1B16]/25 border border-[#6E5332]/60 font-cipher text-[9px] uppercase shrink-0">
+                                    {itemTypo.badgeFontName}
+                                  </span>
+                                )}
                               </div>
 
                               <h3
@@ -1296,30 +1596,127 @@ export default function App() {
                                 {item.title}
                               </h3>
 
+                              {item.sourceUrl && (
+                                <div className="font-mono-tabular text-[11px] text-[#9E1B16] dark:text-[#FF6B5B] truncate">
+                                  🔗 {item.sourceUrl}
+                                </div>
+                              )}
+
                               <p
-                                className={`${itemTypo.bodyClass} line-clamp-2 leading-snug opacity-90`}
+                                className={`${itemTypo.bodyClass} line-clamp-3 leading-snug opacity-90`}
                               >
-                                {item.excerpt}
+                                {item.excerpt || item.content}
                               </p>
                             </div>
 
-                            <div className="pt-3 border-t border-[#6E5332]/40 flex items-center justify-between gap-2">
-                              <div className="flex flex-wrap gap-1.5 min-w-0">
-                                {item.tags.slice(0, 2).map((tag) => (
-                                  <BaggageTag key={tag} text={tag} />
-                                ))}
+                            {/* Interactive Custom Tags & Quick Inline Tag Addition on Every Card */}
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="pt-3 border-t border-[#6E5332]/40 space-y-2 cursor-default"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex flex-wrap gap-1 min-w-0">
+                                  {(item.tags || []).map((tag) => {
+                                    const isFiltered = selectedTags.some(
+                                      (s) => s.toLowerCase() === tag.toLowerCase()
+                                    );
+                                    return (
+                                      <span
+                                        key={tag}
+                                        onClick={() => toggleTagFilter(tag)}
+                                        title={`Nhấn để lọc theo tag #${tag}`}
+                                        className={`inline-flex items-center gap-1 px-2 py-0.5 border text-[10px] font-stamp uppercase tracking-wider cursor-pointer transition-colors ${
+                                          isFiltered
+                                            ? 'bg-[#9E1B16] text-[#F5EAD2] border-[#2A2018]'
+                                            : 'bg-[#DFC79C] dark:bg-[#3D0D0D] border-[#6E5332] text-[#261B12] dark:text-[#FFD6CE] hover:border-[#9E1B16]'
+                                        }`}
+                                      >
+                                        #{tag}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            updateItemById(item.id, {
+                                              tags: item.tags.filter((t) => t !== tag),
+                                            });
+                                          }}
+                                          title={`Gỡ tag "${tag}"`}
+                                          className="hover:text-[#9E1B16] dark:hover:text-[#FF6B5B]"
+                                        >
+                                          <X className="w-2.5 h-2.5" />
+                                        </button>
+                                      </span>
+                                    );
+                                  })}
+
+                                  {item.tags.length < 10 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setInlineTagItemId(
+                                          inlineTagItemId === item.id ? null : item.id
+                                        );
+                                        setInlineTagValue('');
+                                      }}
+                                      className="px-2 py-0.5 text-[10px] font-typewriter border border-dashed border-[#6E5332] bg-[#FAF3E3] dark:bg-[#1E0505] hover:border-[#9E1B16]"
+                                    >
+                                      + Tag
+                                    </button>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) =>
+                                    handleCrumpleDelete(e, item.id, item.title)
+                                  }
+                                  title="Vò nát & bỏ vào thùng rác thiếc"
+                                  className="p-1.5 border border-[#6E5332] bg-[#EBDAB9] dark:bg-[#240606] hover:bg-[#9E1B16] hover:text-white transition-colors shrink-0"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
                               </div>
 
-                              <button
-                                type="button"
-                                onClick={(e) =>
-                                  handleCrumpleDelete(e, item.id, item.title)
-                                }
-                                title="Vò nát & bỏ vào thùng rác thiếc"
-                                className="p-1.5 border border-[#6E5332] bg-[#EBDAB9] dark:bg-[#240606] hover:bg-[#9E1B16] hover:text-white transition-colors shrink-0"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {inlineTagItemId === item.id && (
+                                <form
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const cleaned = inlineTagValue
+                                      .replace(/^#+/, '')
+                                      .trim()
+                                      .slice(0, 64);
+                                    if (
+                                      cleaned &&
+                                      !item.tags.some(
+                                        (t) => t.toLowerCase() === cleaned.toLowerCase()
+                                      ) &&
+                                      item.tags.length < 10
+                                    ) {
+                                      updateItemById(item.id, {
+                                        tags: [...item.tags, cleaned],
+                                      });
+                                    }
+                                    setInlineTagValue('');
+                                    setInlineTagItemId(null);
+                                  }}
+                                  className="flex gap-1"
+                                >
+                                  <input
+                                    type="text"
+                                    autoFocus
+                                    value={inlineTagValue}
+                                    onChange={(e) => setInlineTagValue(e.target.value)}
+                                    placeholder="Nhập tag mới..."
+                                    className="flex-1 px-2 py-1 text-xs font-typewriter border border-[#6E5332] bg-[#FAF3E3] dark:bg-[#1E0505] focus:outline-none focus:border-[#9E1B16]"
+                                  />
+                                  <button
+                                    type="submit"
+                                    className="px-2.5 py-1 bg-[#9E1B16] text-[#F5EAD2] font-stamp text-[10px] uppercase"
+                                  >
+                                    Thêm
+                                  </button>
+                                </form>
+                              )}
                             </div>
                           </div>
                         </article>
@@ -1342,6 +1739,8 @@ export default function App() {
         isOpen={clipperOpen}
         onClose={() => setClipperOpen(false)}
         activeWorkspace={activeWorkspace === 'all' ? 'personal' : activeWorkspace}
+        existingVaultTags={existingVaultTags}
+        initialTab={clipperInitialTab}
         onAddItem={(newItem) => {
           handleAddNewItem(newItem);
           openItem(newItem);

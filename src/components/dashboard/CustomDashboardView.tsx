@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  BookmarkPlus,
   BookOpen,
+  ExternalLink,
+  Globe,
   LayoutGrid,
   Play,
   Quote,
   SlidersHorizontal,
+  Tag,
 } from 'lucide-react';
 import type { DashboardWidget, HabitProfile, VaultItem } from '@/src/types/vault';
 import { DAILY_QUOTES } from '@/src/data/seedVault';
@@ -19,6 +23,7 @@ interface CustomDashboardViewProps {
   onUpdateWidgets: (next: DashboardWidget[]) => void;
   onOpenItem: (item: VaultItem) => void;
   onOpenHabits: () => void;
+  onOpenAddWebsite?: () => void;
 }
 
 export default function CustomDashboardView({
@@ -28,9 +33,11 @@ export default function CustomDashboardView({
   onUpdateWidgets,
   onOpenItem,
   onOpenHabits,
+  onOpenAddWebsite,
 }: CustomDashboardViewProps) {
   const [customizing, setCustomizing] = useState(false);
   const [quoteIdx, setQuoteIdx] = useState(0);
+  const [selectedWebTag, setSelectedWebTag] = useState<string>('ALL');
 
   const moveWidget = (idx: number, dir: -1 | 1) => {
     const target = idx + dir;
@@ -45,6 +52,34 @@ export default function CustomDashboardView({
     onUpdateWidgets(widgets.map((w) => (w.id === id ? { ...w, visible: !w.visible } : w)));
   };
 
+  const frequentWebsites = useMemo(
+    () =>
+      items.filter(
+        (it) =>
+          it.type === 'web_archive' ||
+          it.smartFolder === 'Trang Web Thường Tới' ||
+          Boolean(it.sourceUrl && it.type !== 'video')
+      ),
+    [items]
+  );
+
+  const websiteTags = useMemo(() => {
+    const set = new Set<string>();
+    frequentWebsites.forEach((w) => {
+      (w.tags || []).forEach((t) => {
+        if (t.trim()) set.add(t.trim());
+      });
+    });
+    return Array.from(set);
+  }, [frequentWebsites]);
+
+  const filteredFrequentWebsites = useMemo(() => {
+    if (selectedWebTag === 'ALL') return frequentWebsites;
+    return frequentWebsites.filter((w) =>
+      (w.tags || []).some((t) => t.toLowerCase() === selectedWebTag.toLowerCase())
+    );
+  }, [frequentWebsites, selectedWebTag]);
+
   const readingItems = items.filter(
     (it) => (it.type === 'pdf' || it.type === 'web_archive') && (it.readProgressPct ?? 0) < 100
   );
@@ -53,7 +88,7 @@ export default function CustomDashboardView({
 
   return (
     <div className="space-y-6">
-      {/* Broadsheet Bureau Header (Uses Playfair Display VN + Space Mono VN) */}
+      {/* Broadsheet Bureau Header */}
       <div className="p-5 sm:p-6 manila-paper torn-paper-card border-2 border-[#2A2018] dark:border-[#9E1B16]">
         <div className="flex flex-wrap items-start justify-between gap-4 pb-4 mb-4">
           <div className="space-y-1">
@@ -61,12 +96,21 @@ export default function CustomDashboardView({
               CỤC LƯU TRỮ & ĐIỀU TRA HỒ SƠ MẬT · BIỂU MẪU AV-77A · FONT: PLAYFAIR DISPLAY VN
             </div>
             <h1 className="font-dossier text-2xl sm:text-3xl font-extrabold tracking-tight">
-              BẢNG ĐIỀU HÀNH HỒ SƠ TÌNH BÁO
+              BẢNG ĐIỀU HÀNH HỒ SƠ & SỔ ĐỊA CHỈ WEB
             </h1>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="stamp-crimson text-xs font-bold">MẬT · LƯU HÀNH NỘI BỘ</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenAddWebsite && (
+              <button
+                type="button"
+                onClick={onOpenAddWebsite}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-[#9E1B16] hover:bg-[#C81E1E] text-[#F5EAD2] border-2 border-[#2A2018] text-xs font-stamp uppercase tracking-wider hard-shadow"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                + Lưu Trang Web Thường Tới
+              </button>
+            )}
             <button
               onClick={() => setCustomizing((c) => !c)}
               className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-stamp uppercase border transition-colors ${
@@ -86,15 +130,17 @@ export default function CustomDashboardView({
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
           <div>
             <div className="font-typewriter text-[10px] uppercase text-[#574A3D] dark:text-[#FF9E8E]">
-              Tổng Hồ Sơ Lưu
+              Tổng Mục Lưu Trữ
             </div>
-            <div className="font-legal-dossier text-xl font-bold">{items.length} hồ sơ</div>
+            <div className="font-legal-dossier text-xl font-bold">{items.length} mục</div>
           </div>
           <div>
             <div className="font-typewriter text-[10px] uppercase text-[#574A3D] dark:text-[#FF9E8E]">
-              Đang Điều Tra
+              Trang Web Thường Tới
             </div>
-            <div className="font-dossier text-lg font-bold">{readingItems.length} chuyên án</div>
+            <div className="font-dossier text-lg font-bold text-[#9E1B16] dark:text-[#FF6B5B]">
+              {frequentWebsites.length} trang web
+            </div>
           </div>
           <div>
             <div className="font-typewriter text-[10px] uppercase text-[#574A3D] dark:text-[#FF9E8E]">
@@ -112,6 +158,150 @@ export default function CustomDashboardView({
           </div>
         </div>
       </div>
+
+      {/* Dedicated Frequent Websites Directory Widget on Dashboard */}
+      <section className="p-5 manila-paper torn-paper-card border-2 border-[#2A2018] dark:border-[#9E1B16] space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <h2 className="font-dossier text-lg sm:text-xl font-bold flex items-center gap-2">
+              <Globe className="w-5 h-5 text-[#9E1B16] dark:text-[#FF6B5B]" />
+              Sổ Địa Chỉ Trang Web Thường Xuyên Lui Tới ({frequentWebsites.length})
+            </h2>
+            <p className="font-typewriter text-xs text-[#574A3D] dark:text-[#FF9E8E]">
+              Lưu trữ các trang web hay vào kèm ảnh chụp màn hình (Paste Ctrl+V), mô tả & lọc nhanh theo Tag
+            </p>
+          </div>
+
+          {onOpenAddWebsite && (
+            <button
+              type="button"
+              onClick={onOpenAddWebsite}
+              className="px-3 py-1.5 bg-[#2A2018] dark:bg-[#9E1B16] text-[#F5EAD2] font-stamp text-xs uppercase tracking-wider hover:bg-[#9E1B16] inline-flex items-center gap-1.5"
+            >
+              <BookmarkPlus className="w-3.5 h-3.5" />
+              + Thêm Trang Web (Có Paste Ảnh Ctrl+V)
+            </button>
+          )}
+        </div>
+
+        {websiteTags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <span className="inline-flex items-center gap-1 font-stamp text-[10px] uppercase text-[#9E1B16] dark:text-[#FF6B5B] mr-1">
+              <Tag className="w-3 h-3" />
+              Lọc trang web theo Tag:
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedWebTag('ALL')}
+              className={`px-2 py-0.5 text-[10px] font-stamp uppercase border ${
+                selectedWebTag === 'ALL'
+                  ? 'bg-[#2A2018] text-[#F5EAD2] border-[#2A2018]'
+                  : 'bg-[#F5EAD2] dark:bg-[#1E0505] border-[#6E5332]'
+              }`}
+            >
+              Tất cả ({frequentWebsites.length})
+            </button>
+            {websiteTags.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setSelectedWebTag(t)}
+                className={`px-2 py-0.5 text-[10px] font-stamp uppercase border ${
+                  selectedWebTag.toLowerCase() === t.toLowerCase()
+                    ? 'bg-[#9E1B16] text-[#F5EAD2] border-[#2A2018]'
+                    : 'bg-[#DFC79C] dark:bg-[#3D0D0D] border-[#6E5332] hover:border-[#9E1B16]'
+                }`}
+              >
+                #{t}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="masking-tape-divider" />
+
+        {filteredFrequentWebsites.length === 0 ? (
+          <div className="p-6 bg-[#F5EAD2]/80 dark:bg-[#1E0505] border border-dashed border-[#6E5332] text-center space-y-2">
+            <p className="font-handwriting text-xl text-[#574A3D] dark:text-[#FF9E8E]">
+              "Bạn chưa lưu trang web thường tới nào. Hãy bấm nút '+ Thêm Trang Web' để lưu link, dán ảnh chụp màn hình bằng Ctrl+V và gắn Tag phân loại!"
+            </p>
+            {onOpenAddWebsite && (
+              <button
+                type="button"
+                onClick={onOpenAddWebsite}
+                className="px-4 py-1.5 bg-[#9E1B16] text-[#F5EAD2] font-stamp text-xs uppercase tracking-wider"
+              >
+                + Lưu Trang Web Đầu Tiên
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredFrequentWebsites.map((site) => (
+              <div
+                key={site.id}
+                onClick={() => onOpenItem(site)}
+                className="group cursor-pointer bg-[#FAF3E3] dark:bg-[#1E0505] border-2 border-[#2A2018] dark:border-[#9E1B16] hard-shadow hover:-translate-y-1 transition-transform flex flex-col overflow-hidden"
+              >
+                {site.coverImage && (
+                  <div className="h-36 bg-[#1C1612] border-b border-[#6E5332] overflow-hidden">
+                    <img
+                      src={site.coverImage}
+                      alt={site.title}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                    />
+                  </div>
+                )}
+                <div className="p-3.5 flex-1 flex flex-col justify-between space-y-2.5">
+                  <div className="space-y-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-dossier font-bold text-base leading-snug group-hover:text-[#9E1B16] dark:group-hover:text-[#FF6B5B]">
+                        {site.title}
+                      </h3>
+                      {site.sourceUrl && (
+                        <a
+                          href={site.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#9E1B16] hover:bg-[#C81E1E] text-[#F5EAD2] font-stamp text-[10px] uppercase tracking-wider shrink-0"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Mở Web
+                        </a>
+                      )}
+                    </div>
+                    {site.sourceUrl && (
+                      <div className="font-mono-tabular text-[11px] text-[#9E1B16] dark:text-[#FF6B5B] truncate">
+                        {site.sourceUrl}
+                      </div>
+                    )}
+                    <p className="font-handwriting text-base text-[#3A2E23] dark:text-[#FFD6CE] line-clamp-2">
+                      {site.excerpt || site.content}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1 pt-2 border-t border-[#6E5332]/40">
+                    {(site.tags || []).map((tag) => (
+                      <span
+                        key={tag}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedWebTag(tag);
+                        }}
+                        className="px-2 py-0.5 bg-[#DFC79C] dark:bg-[#3D0D0D] border border-[#6E5332] font-stamp text-[10px] uppercase"
+                      >
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Widget Order & Visibility Customizer */}
       {customizing && (
@@ -191,7 +381,6 @@ export default function CustomDashboardView({
                               {pct}%
                             </span>
                           </div>
-                          {/* #38: Burning Cigarette / Bleeding Red-Ink Thread Progress Bar */}
                           <div className="relative h-2 bg-[#DFC79C] dark:bg-[#140404] border border-[#6E5332]/60 flex items-center">
                             <div
                               className="h-full bg-gradient-to-r from-[#6E120E] via-[#9E1B16] to-[#E25822]"
@@ -205,7 +394,7 @@ export default function CustomDashboardView({
                           <div className="font-serif-editorial italic text-xs text-[#574A3D] dark:text-[#FF9E8E]">
                             {item.type === 'pdf'
                               ? `Đang đọc dở Trang ${item.lastReadPage ?? 1} / ${item.pageCount ?? 1}`
-                              : 'Bản lưu báo chí · Chế độ Zen Mode'}
+                              : `Trang Web: ${item.sourceUrl || 'Chế độ Zen Mode'}`}
                           </div>
                         </button>
                       );

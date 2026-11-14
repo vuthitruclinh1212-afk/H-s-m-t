@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BookOpenCheck,
   Code2,
+  ExternalLink,
   Eye,
   FileSpreadsheet,
   History,
@@ -18,12 +19,17 @@ import {
 import type { CollaborativeComment, ItemVersion, VaultItem } from '@/src/types/vault';
 import Model3DCanvas from '@/src/components/viewer/Model3DCanvas';
 import { RevolverSpinner, RubberStampButton } from '@/src/components/bureau/BureauDecorations';
+import {
+  ClipboardImagePasteBox,
+  CustomTagEditor,
+} from '@/src/components/bureau/CustomTagManager';
 import { playTypewriterDing } from '@/src/utils/bureauAudio';
 import { ITEM_TYPE_TYPOGRAPHY } from '@/src/utils/bureauTypography';
 
 interface UniversalItemViewerProps {
   item: VaultItem;
   comments: CollaborativeComment[];
+  existingVaultTags?: string[];
   onUpdateItem: (patch: Partial<VaultItem>) => void;
   onAddComment: (text: string) => void;
   onOpenShareModal: () => void;
@@ -48,6 +54,7 @@ function renderTextWithRedactions(text: string) {
 export default function UniversalItemViewer({
   item,
   comments,
+  existingVaultTags = [],
   onUpdateItem,
   onAddComment,
   onOpenShareModal,
@@ -58,10 +65,17 @@ export default function UniversalItemViewer({
   const [zenPaper, setZenPaper] = useState<'default' | 'sepia'>('sepia');
 
   const [draftContent, setDraftContent] = useState(item.content);
+  const [draftSourceUrl, setDraftSourceUrl] = useState(item.sourceUrl || '');
+  const [editingWebDetails, setEditingWebDetails] = useState(false);
   const [previewHandwriting, setPreviewHandwriting] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftContent(item.content);
+    setDraftSourceUrl(item.sourceUrl || '');
+  }, [item.id, item.content, item.sourceUrl]);
 
   const itemTypo = ITEM_TYPE_TYPOGRAPHY[item.type];
 
@@ -276,20 +290,109 @@ export default function UniversalItemViewer({
           </div>
         )}
 
-        {/* WEB ARCHIVE — Newsreader VN + Playfair Display VN */}
+        {/* WEB ARCHIVE / FREQUENT WEBSITE BOOKMARK — Newsreader VN + Playfair Display VN */}
         {item.type === 'web_archive' && (
           <div
-            className={`torn-paper-card border-2 border-[#2A2018] dark:border-[#9E1B16] p-6 sm:p-10 transition-colors ${
+            className={`torn-paper-card border-2 border-[#2A2018] dark:border-[#9E1B16] p-6 sm:p-8 transition-colors ${
               zenMode && zenPaper === 'sepia'
                 ? 'manila-paper'
                 : 'bg-[#F8F3E8] dark:bg-[#1E0505] text-[#1A120B] dark:text-[#FFD6CE]'
             }`}
           >
+            {/* Prominent Direct Website Visit Banner */}
+            <div className="mb-5 p-3.5 bg-[#DFC79C] dark:bg-[#3A0C0C] border-2 border-[#2A2018] flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="font-stamp text-[10px] uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
+                  ĐỊA CHỈ TRANG WEB ĐÃ LƯU TRONG SỔ
+                </div>
+                <div className="font-mono-tabular text-xs font-bold truncate">
+                  {item.sourceUrl || 'Chưa gắn đường dẫn URL'}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditingWebDetails((v) => !v)}
+                  className="px-3 py-1.5 bg-[#F5EAD2] dark:bg-[#1E0505] border border-[#2A2018] font-typewriter text-xs hover:bg-[#C9B38C]"
+                >
+                  {editingWebDetails ? 'Đóng chỉnh sửa' : 'Sửa Mô Tả & Dán Ảnh'}
+                </button>
+                {item.sourceUrl && (
+                  <a
+                    href={item.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-[#9E1B16] hover:bg-[#C81E1E] text-[#F5EAD2] border-2 border-[#2A2018] font-stamp text-xs uppercase tracking-wider hard-shadow"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Mở Trang Web Ngay
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {editingWebDetails && (
+              <div className="mb-6 p-4 bg-[#FAF3E3] dark:bg-[#240606] border-2 border-[#6E5332] space-y-3">
+                <div className="font-stamp text-xs uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
+                  CẬP NHẬT THÔNG TIN TRANG WEB & DÁN ẢNH MINH HỌA (CTRL+V)
+                </div>
+                <div>
+                  <label className="block font-typewriter text-xs font-bold mb-1">
+                    Đường dẫn URL Trang Web
+                  </label>
+                  <input
+                    type="text"
+                    value={draftSourceUrl}
+                    onChange={(e) => setDraftSourceUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full px-3 py-1.5 text-xs font-mono-tabular border border-[#6E5332] bg-[#F5EAD2] dark:bg-[#1E0505]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-typewriter text-xs font-bold mb-1">
+                    Mô tả & Ghi chú về trang web
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={draftContent}
+                    onChange={(e) => setDraftContent(e.target.value)}
+                    placeholder="Nhập mô tả chi tiết về trang web..."
+                    className="w-full px-3 py-2 font-handwriting text-lg border border-[#6E5332] bg-[#F5EAD2] dark:bg-[#1E0505]"
+                  />
+                </div>
+                <ClipboardImagePasteBox
+                  imageDataUrl={item.coverImage}
+                  onChangeImage={(nextImg) => onUpdateItem({ coverImage: nextImg || '' })}
+                />
+                <div className="flex justify-end">
+                  <RubberStampButton
+                    onClick={() => {
+                      const cleanUrl =
+                        draftSourceUrl.trim() && !/^https?:\/\//i.test(draftSourceUrl.trim())
+                          ? `https://${draftSourceUrl.trim()}`
+                          : draftSourceUrl.trim();
+                      onUpdateItem({
+                        sourceUrl: cleanUrl,
+                        content: draftContent,
+                        excerpt: draftContent.slice(0, 180),
+                      });
+                      setEditingWebDetails(false);
+                      playTypewriterDing();
+                      setAiMessage('Đã cập nhật thông tin & mô tả trang web.');
+                    }}
+                    stampWord="UPDATED"
+                  >
+                    Lưu Thay Đổi Trang Web
+                  </RubberStampButton>
+                </div>
+              </div>
+            )}
+
             {zenMode ? (
               <article className="max-w-2xl mx-auto space-y-5">
                 <div className="flex items-center justify-between pb-3">
                   <div className="font-mono-tabular text-[11px] uppercase text-[#574A3D] dark:text-[#FF9E8E]">
-                    Bản Đọc Tập Trung (Newsreader VN) · {item.sourceUrl || 'Offline Snapshot'}
+                    Bản Mô Tả & Lưu Trữ Trang Web · {item.sourceUrl || 'Offline Snapshot'}
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -315,7 +418,7 @@ export default function UniversalItemViewer({
                     src={item.coverImage}
                     alt={item.title}
                     referrerPolicy="no-referrer"
-                    className="w-full h-64 object-cover border-2 border-[#2A2018] sepia-[0.2]"
+                    className="w-full max-h-80 object-contain bg-[#1C1612] border-2 border-[#2A2018]"
                   />
                 )}
 
@@ -552,26 +655,43 @@ export default function UniversalItemViewer({
           </details>
         )}
 
-        {/* #47: String-Tied Pouch for Sealed Metadata */}
+        {/* #47: String-Tied Pouch for Sealed Metadata, Free-form Custom Tags & Copy-Paste Image */}
         <details
           open
           className="p-4 bg-[#D4B483] dark:bg-[#3A0C0C] border-2 border-[#2A2018] dark:border-[#9E1B16] hard-shadow"
         >
           <summary className="cursor-pointer list-none flex items-center justify-between font-typewriter text-sm font-bold">
-            <span>Túi Thông Tin Niêm Phong</span>
+            <span>Gắn Tag Tự Do & Ảnh Minh Họa</span>
             <span className="w-3.5 h-3.5 rounded-full bg-[#9E1B16] border border-[#2A2018]" />
           </summary>
 
           <div className="masking-tape-divider my-3" />
 
-          <div className="font-mono-tabular text-xs space-y-2">
-            <div>
+          <div className="space-y-3">
+            <div className="font-mono-tabular text-xs">
               NGĂN HỒ SƠ: <strong>{item.smartFolder}</strong>
             </div>
-            <div>
-              THẺ NHẬN DIỆN: <span>{item.tags.join(' · ')}</span>
+
+            <div className="space-y-1">
+              <div className="font-typewriter text-xs font-bold uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
+                Thẻ Tag Phân Loại (Thêm / Xóa tự do):
+              </div>
+              <CustomTagEditor
+                tags={item.tags}
+                onChangeTags={(nextTags) => onUpdateItem({ tags: nextTags })}
+                existingVaultTags={existingVaultTags}
+              />
             </div>
-            <div>
+
+            {item.type !== 'web_archive' && (
+              <ClipboardImagePasteBox
+                label="Ảnh Bìa / Ảnh Minh Họa (Ctrl+V để Paste ảnh)"
+                imageDataUrl={item.coverImage}
+                onChangeImage={(nextImg) => onUpdateItem({ coverImage: nextImg || '' })}
+              />
+            )}
+
+            <div className="font-mono-tabular text-xs pt-1">
               BẢN LƯU OFFLINE:{' '}
               <button
                 onClick={() => onUpdateItem({ offlineCached: !item.offlineCached })}
