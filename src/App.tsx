@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, type User } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
 import {
   ArrowLeft,
   Award,
@@ -54,8 +54,11 @@ import {
 import { ITEM_TYPE_TYPOGRAPHY, SECTION_TYPOGRAPHY } from '@/src/utils/bureauTypography';
 import {
   auth,
+  getSavedCloudEmailSession,
+  signInOrRegisterWithEmail,
   signInWithGoogleAccount,
   signOutAccount,
+  type VaultAuthUser,
 } from '@/src/firebase';
 import {
   createCommentInCloud,
@@ -135,7 +138,9 @@ const FOLDER_TABS: Array<{
 
 export default function App() {
   // Authentication & Cloud Hydration State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<VaultAuthUser | null>(() =>
+    getSavedCloudEmailSession()
+  );
   const [authReady, setAuthReady] = useState(false);
   const [cloudHydrated, setCloudHydrated] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -230,63 +235,77 @@ export default function App() {
     []
   );
 
-  // Firebase Auth & Per-Account Cloud Firestore Subscription (Anti-Overwrite)
+  // Listen to Firebase Auth state changes AND restore saved Cloud-Email session
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        setCurrentUser({
+          uid: fbUser.uid,
+          email: fbUser.email,
+          displayName: fbUser.displayName,
+          photoURL: fbUser.photoURL,
+          authMode: 'firebase',
+        });
+      } else {
+        const savedEmailUser = getSavedCloudEmailSession();
+        if (savedEmailUser) {
+          setCurrentUser(savedEmailUser);
+        } else {
+          setCurrentUser(null);
+        }
+      }
+      setAuthReady(true);
+    });
+
+    return () => {
+      unsubAuth();
+    };
+  }, []);
+
+  // Per-Account Cloud Hydration & Subscription (Anti-Overwrite across devices & domains)
   useEffect(() => {
     let unsubItems: (() => void) | null = null;
     let unsubComments: (() => void) | null = null;
     let cancelled = false;
 
-    const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      if (unsubItems) {
-        unsubItems();
-        unsubItems = null;
-      }
-      if (unsubComments) {
-        unsubComments();
-        unsubComments = null;
-      }
-
-      if (!user) {
-        setCurrentUser(null);
-        setCloudHydrated(false);
-        setItems([]);
-        setCanvasPositions({});
-        setCanvasConnections([]);
-        setComments([]);
-        setHabits(INITIAL_HABITS);
-        setWidgets(INITIAL_WIDGETS);
-        setActiveItemId(null);
-        setAuthReady(true);
-        return;
-      }
-
-      setCurrentUser(user);
-      setAuthReady(true);
+    if (!currentUser) {
       setCloudHydrated(false);
+      setItems([]);
+      setCanvasPositions({});
+      setCanvasConnections([]);
+      setComments([]);
+      setHabits(INITIAL_HABITS);
+      setWidgets(INITIAL_WIDGETS);
+      setActiveItemId(null);
+      return;
+    }
 
+    setCloudHydrated(false);
+
+    (async () => {
       try {
         // 1. Load existing user profile/habits/widgets from Cloud WITHOUT overwriting
-        const meta = await ensureAndLoadUserVaultState(user);
+        const meta = await ensureAndLoadUserVaultState(currentUser);
         if (cancelled) return;
         setHabits(meta.habits);
         setWidgets(meta.widgets);
 
-        // 2. Subscribe to this user's personal items in Cloud Firestore
+        // 2. Subscribe to this user's personal items in Cloud / Cross-Domain Store
         unsubItems = subscribeUserVaultItems(
-          user.uid,
+          currentUser.uid,
           (cloudItems, cloudPositions, cloudConnections) => {
             if (cancelled) return;
             setItems(cloudItems);
             setCanvasPositions(cloudPositions);
             setCanvasConnections(cloudConnections);
             setOfflineSyncTime(new Date().toISOString());
-            saveVaultSnapshotToIndexedDB(cloudItems, user.uid);
+            saveVaultSnapshotToIndexedDB(cloudItems, currentUser.uid);
             setCloudHydrated(true);
           }
         );
 
         // 3. Subscribe to this user's comments
-        unsubComments = subscribeUserVaultComments(user.uid, (cloudComments) => {
+        unsubComments = subscribeUserVaultComments(currentUser.uid, (cloudComments) => {
           if (cancelled) return;
           setComments(cloudComments);
         });
@@ -294,15 +313,14 @@ export default function App() {
         console.error('Lỗi đồng bộ tài khoản:', err);
         setCloudHydrated(true);
       }
-    });
+    })();
 
     return () => {
       cancelled = true;
-      unsubAuth();
       if (unsubItems) unsubItems();
       if (unsubComments) unsubComments();
     };
-  }, []);
+  }, [currentUser]);
 
   // Persist habits & widgets changes ONLY after initial cloud hydration has completed
   useEffect(() => {
@@ -320,10 +338,37 @@ export default function App() {
     setIsSigningIn(true);
     try {
       await signInWithGoogleAccount();
-      showToast('Đã xác thực tài khoản & đồng bộ kho lưu trữ cá nhân.', 'approved');
+      showToast('Đã xác thực tài khoản Google & đồng bộ kho lưu trữ cá nhân.', 'approved');
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Không thể đăng nhập bằng Google.';
+      setAuthError(msg);
+      throw err;
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleEmailLogin = async (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+    mode: 'login' | 'register' | 'auto';
+  }) => {
+    setAuthError(null);
+    setIsSigningIn(true);
+    try {
+      const sessionUser = await signInOrRegisterWithEmail(params);
+      setCurrentUser(sessionUser);
+      showToast(
+        sessionUser.isNewAccount
+          ? `Đã khởi tạo Kho Lưu Trữ độc lập cho ${sessionUser.email}`
+          : `Đã khôi phục dữ liệu tài khoản ${sessionUser.email}`,
+        'approved'
+      );
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Không thể xác thực tài khoản Email.';
       setAuthError(msg);
       throw err;
     } finally {
@@ -338,6 +383,7 @@ export default function App() {
       await saveUserVaultMetaToCloud(currentUser, habits, widgets);
       await saveVaultSnapshotToIndexedDB(items, currentUser.uid);
       await signOutAccount();
+      setCurrentUser(null);
     } catch (err) {
       console.error('Lỗi khi đăng xuất:', err);
     }
@@ -515,11 +561,12 @@ export default function App() {
     );
   }
 
-  // Require Google Login so each email gets its own isolated multi-device account
+  // Require Login (Email+Password or Google) so each email gets its own isolated multi-device account
   if (!currentUser) {
     return (
       <TopSecretLoginGate
-        onUnlock={handleGoogleLogin}
+        onUnlockGoogle={handleGoogleLogin}
+        onUnlockEmail={handleEmailLogin}
         isAuthenticating={isSigningIn}
         authError={authError}
       />

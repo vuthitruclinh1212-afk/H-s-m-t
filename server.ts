@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -12,7 +13,293 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
+// Allow CORS from https://h-s-m-t.vercel.app and all authorized origins
+app.use((req, res, next) => {
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Vault-Uid');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 app.use(express.json({ limit: '25mb' }));
+
+// Persistent Multi-Device Cloud Vault Database (1 Email = 1 Unique Account, Anti-Overwrite)
+const CLOUD_DB_FILE = path.join(__dirname, '.aethelvault_cloud_db.json');
+
+interface CloudAccountRecord {
+  uid: string;
+  email: string;
+  displayName: string;
+  passwordHash: string;
+  createdAt: string;
+  updatedAt: string;
+  meta: {
+    expPoints: number;
+    level: number;
+    streakDays: number;
+    readingMinutesToday: number;
+    dailyGoalMinutes: number;
+    earnedBadgeIds: string[];
+    hiddenWidgetIds: string[];
+  };
+  items: Record<string, Record<string, unknown>>;
+  comments: Record<string, Record<string, unknown>>;
+}
+
+interface CloudDbSchema {
+  accountsByUid: Record<string, CloudAccountRecord>;
+  uidByEmail: Record<string, string>;
+}
+
+function loadCloudDb(): CloudDbSchema {
+  try {
+    if (fs.existsSync(CLOUD_DB_FILE)) {
+      const raw = fs.readFileSync(CLOUD_DB_FILE, 'utf-8');
+      const parsed = JSON.parse(raw) as CloudDbSchema;
+      if (parsed && parsed.accountsByUid && parsed.uidByEmail) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to read cloud vault store:', err);
+  }
+  return { accountsByUid: {}, uidByEmail: {} };
+}
+
+const cloudDb: CloudDbSchema = loadCloudDb();
+
+function persistCloudDb() {
+  try {
+    fs.writeFileSync(CLOUD_DB_FILE, JSON.stringify(cloudDb, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to persist cloud vault store:', err);
+  }
+}
+
+function deriveUidFromEmail(email: string): string {
+  const norm = email.trim().toLowerCase();
+  const hash = crypto.createHash('sha256').update(`aethelvault::${norm}`).digest('hex').slice(0, 28);
+  return `usr_${hash}`;
+}
+
+function hashAccountPassword(email: string, password: string): string {
+  const norm = email.trim().toLowerCase();
+  return crypto.createHash('sha256').update(`aethelvault_pw::${norm}::${password}`).digest('hex');
+}
+
+// Cloud Auth Endpoint: 1 Email = 1 Account, Never Overwrites Existing Account Data
+app.post('/api/cloud-vault/auth', (req, res) => {
+  const { email, password, displayName, mode } = req.body as {
+    email?: string;
+    password?: string;
+    displayName?: string;
+    mode?: 'login' | 'register' | 'auto';
+  };
+  const normEmail = (email || '').trim().toLowerCase();
+  if (!normEmail || !normEmail.includes('@')) {
+    return res.status(400).json({ error: 'Vui lòng nhập địa chỉ Email hợp lệ.' });
+  }
+  if (!password || password.length < 4) {
+    return res.status(400).json({ error: 'Mật khẩu niêm phong phải có ít nhất 4 ký tự.' });
+  }
+
+  const existingUid = cloudDb.uidByEmail[normEmail];
+  const pwHash = hashAccountPassword(normEmail, password);
+  const nowIso = new Date().toISOString();
+
+  if (existingUid && cloudDb.accountsByUid[existingUid]) {
+    const acc = cloudDb.accountsByUid[existingUid];
+    if (mode === 'register') {
+      return res.status(409).json({
+        error: `Email "${normEmail}" đã được đăng ký một tài khoản duy nhất. Vui lòng chọn chế độ Đăng nhập để khôi phục dữ liệu cũ.`,
+      });
+    }
+    if (acc.passwordHash !== pwHash) {
+      return res.status(401).json({
+        error: 'Mật khẩu không chính xác cho tài khoản Email này. Dữ liệu cũ được bảo vệ chống ghi đè.',
+      });
+    }
+    acc.updatedAt = nowIso;
+    persistCloudDb();
+    return res.json({
+      user: {
+        uid: acc.uid,
+        email: acc.email,
+        displayName: acc.displayName,
+        isNewAccount: false,
+      },
+    });
+  }
+
+  // Create new isolated account for this email
+  const uid = deriveUidFromEmail(normEmail);
+  const cleanName = (displayName || normEmail.split('@')[0] || 'Thanh tra').trim().slice(0, 80);
+  const newAcc: CloudAccountRecord = {
+    uid,
+    email: normEmail,
+    displayName: cleanName,
+    passwordHash: pwHash,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    meta: {
+      expPoints: 0,
+      level: 1,
+      streakDays: 1,
+      readingMinutesToday: 0,
+      dailyGoalMinutes: 60,
+      earnedBadgeIds: [],
+      hiddenWidgetIds: [],
+    },
+    items: {},
+    comments: {},
+  };
+
+  cloudDb.uidByEmail[normEmail] = uid;
+  cloudDb.accountsByUid[uid] = newAcc;
+  persistCloudDb();
+
+  return res.json({
+    user: {
+      uid: newAcc.uid,
+      email: newAcc.email,
+      displayName: newAcc.displayName,
+      isNewAccount: true,
+    },
+  });
+});
+
+// Ensure or Fetch Account Snapshot without Overwriting
+app.get('/api/cloud-vault/snapshot/:uid', (req, res) => {
+  const { uid } = req.params;
+  const emailQuery = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+  const nameQuery = typeof req.query.displayName === 'string' ? req.query.displayName.trim() : '';
+
+  let acc = cloudDb.accountsByUid[uid];
+  if (!acc && emailQuery && cloudDb.uidByEmail[emailQuery]) {
+    acc = cloudDb.accountsByUid[cloudDb.uidByEmail[emailQuery]];
+  }
+  if (!acc) {
+    const nowIso = new Date().toISOString();
+    acc = {
+      uid,
+      email: emailQuery || `${uid}@aethel.bureau`,
+      displayName: nameQuery || (emailQuery ? emailQuery.split('@')[0] : 'Thanh tra'),
+      passwordHash: '',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      meta: {
+        expPoints: 0,
+        level: 1,
+        streakDays: 1,
+        readingMinutesToday: 0,
+        dailyGoalMinutes: 60,
+        earnedBadgeIds: [],
+        hiddenWidgetIds: [],
+      },
+      items: {},
+      comments: {},
+    };
+    cloudDb.accountsByUid[uid] = acc;
+    if (emailQuery && !cloudDb.uidByEmail[emailQuery]) {
+      cloudDb.uidByEmail[emailQuery] = uid;
+    }
+    persistCloudDb();
+  }
+
+  return res.json({
+    uid: acc.uid,
+    email: acc.email,
+    displayName: acc.displayName,
+    meta: acc.meta,
+    items: Object.values(acc.items),
+    comments: Object.values(acc.comments),
+  });
+});
+
+app.put('/api/cloud-vault/meta/:uid', (req, res) => {
+  const { uid } = req.params;
+  const acc = cloudDb.accountsByUid[uid];
+  if (!acc) {
+    return res.status(404).json({ error: 'Không tìm thấy tài khoản.' });
+  }
+  const body = req.body as Partial<CloudAccountRecord['meta']>;
+  acc.meta = {
+    expPoints: typeof body.expPoints === 'number' ? body.expPoints : acc.meta.expPoints,
+    level: typeof body.level === 'number' ? body.level : acc.meta.level,
+    streakDays: typeof body.streakDays === 'number' ? body.streakDays : acc.meta.streakDays,
+    readingMinutesToday:
+      typeof body.readingMinutesToday === 'number'
+        ? body.readingMinutesToday
+        : acc.meta.readingMinutesToday,
+    dailyGoalMinutes:
+      typeof body.dailyGoalMinutes === 'number' ? body.dailyGoalMinutes : acc.meta.dailyGoalMinutes,
+    earnedBadgeIds: Array.isArray(body.earnedBadgeIds)
+      ? body.earnedBadgeIds
+      : acc.meta.earnedBadgeIds,
+    hiddenWidgetIds: Array.isArray(body.hiddenWidgetIds)
+      ? body.hiddenWidgetIds
+      : acc.meta.hiddenWidgetIds,
+  };
+  acc.updatedAt = new Date().toISOString();
+  persistCloudDb();
+  return res.json({ ok: true, meta: acc.meta });
+});
+
+app.put('/api/cloud-vault/item/:uid/:itemId', (req, res) => {
+  const { uid, itemId } = req.params;
+  const acc = cloudDb.accountsByUid[uid];
+  if (!acc) {
+    return res.status(404).json({ error: 'Không tìm thấy tài khoản.' });
+  }
+  const payload = req.body as Record<string, unknown>;
+  const existing = acc.items[itemId] || {};
+  acc.items[itemId] = {
+    ...existing,
+    ...payload,
+    id: itemId,
+    ownerId: uid,
+    updatedAtIso: new Date().toISOString(),
+  };
+  acc.updatedAt = new Date().toISOString();
+  persistCloudDb();
+  return res.json({ ok: true, item: acc.items[itemId] });
+});
+
+app.delete('/api/cloud-vault/item/:uid/:itemId', (req, res) => {
+  const { uid, itemId } = req.params;
+  const acc = cloudDb.accountsByUid[uid];
+  if (!acc) {
+    return res.status(404).json({ error: 'Không tìm thấy tài khoản.' });
+  }
+  delete acc.items[itemId];
+  acc.updatedAt = new Date().toISOString();
+  persistCloudDb();
+  return res.json({ ok: true });
+});
+
+app.post('/api/cloud-vault/comment/:uid', (req, res) => {
+  const { uid } = req.params;
+  const acc = cloudDb.accountsByUid[uid];
+  if (!acc) {
+    return res.status(404).json({ error: 'Không tìm thấy tài khoản.' });
+  }
+  const comment = req.body as { id?: string } & Record<string, unknown>;
+  const cid = String(comment.id || `cm-${crypto.randomUUID().slice(0, 8)}`);
+  acc.comments[cid] = {
+    ...comment,
+    id: cid,
+    ownerId: uid,
+  };
+  acc.updatedAt = new Date().toISOString();
+  persistCloudDb();
+  return res.json({ ok: true, comment: acc.comments[cid] });
+});
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;

@@ -488,113 +488,314 @@ export function VietnameseTypographyModal({
   );
 }
 
-// #56: Top Secret Login Closed Folder Cover Gate with Real Google Authentication
+// #56: Top Secret Login Closed Folder Cover Gate with Multi-Domain Email+Password & Google Auth
 export function TopSecretLoginGate({
-  onUnlock,
+  onUnlockGoogle,
+  onUnlockEmail,
   isAuthenticating = false,
   authError = null,
 }: {
-  onUnlock: () => Promise<void> | void;
+  onUnlockGoogle: () => Promise<void> | void;
+  onUnlockEmail: (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+    mode: 'login' | 'register' | 'auto';
+  }) => Promise<void> | void;
   isAuthenticating?: boolean;
   authError?: string | null;
 }) {
   const [opening, setOpening] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [authTab, setAuthTab] = useState<'auto' | 'register'>('auto');
+  const [copiedDomain, setCopiedDomain] = useState<string | null>(null);
 
-  const handleOpen = async () => {
+  const isUnauthorizedDomainError =
+    Boolean(authError) &&
+    (authError!.includes('auth/unauthorized-domain') ||
+      authError!.includes('unauthorized-domain'));
+
+  const currentHost =
+    typeof window !== 'undefined' && window.location.hostname
+      ? window.location.hostname
+      : 'h-s-m-t.vercel.app';
+
+  const handleGoogleClick = async () => {
     if (isAuthenticating) return;
     playStampThud();
     try {
-      await onUnlock();
+      await onUnlockGoogle();
       setOpening(true);
     } catch {
       setOpening(false);
     }
   };
 
+  const handleEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isAuthenticating) return;
+    playStampThud();
+    try {
+      await onUnlockEmail({
+        email,
+        password,
+        displayName: displayName.trim() || undefined,
+        mode: authTab,
+      });
+      setOpening(true);
+    } catch {
+      setOpening(false);
+    }
+  };
+
+  const copyDomainText = (domain: string) => {
+    navigator.clipboard?.writeText(domain).catch(() => {});
+    setCopiedDomain(domain);
+    setTimeout(() => setCopiedDomain(null), 2000);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 oak-desk-bg flex items-center justify-center p-4 overflow-hidden">
+    <div className="fixed inset-0 z-50 oak-desk-bg flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
       <DeskBackgroundDecor />
 
       {/* Two Folder Wings that split open (#20, #56) */}
-      <div className="relative w-full max-w-2xl min-h-[460px] flex overflow-hidden border-2 border-[#2A2018] hard-shadow-lg">
+      <div className="relative w-full max-w-4xl min-h-[520px] flex flex-col md:flex-row overflow-hidden border-2 border-[#2A2018] hard-shadow-lg my-auto">
+        {/* Left Folder Wing: Bureau Identity & Vercel Domain Link Status */}
         <div
-          className={`w-1/2 manila-paper border-r border-[#8C7659] p-6 flex flex-col justify-between ${
+          className={`w-full md:w-5/12 manila-paper border-b md:border-b-0 md:border-r border-[#8C7659] p-5 sm:p-6 flex flex-col justify-between gap-4 ${
             opening ? 'wing-left-open' : ''
           }`}
         >
-          <div className="font-cipher text-[11px] uppercase tracking-widest text-[#574A3D] dark:text-[#FF9E8E]">
-            BIỂU MẪU SC-029 · ĐỒNG BỘ ĐA THIẾT BỊ
+          <div className="space-y-1">
+            <div className="font-cipher text-[11px] uppercase tracking-widest text-[#574A3D] dark:text-[#FF9E8E]">
+              BIỂU MẪU SC-029 · ĐỒNG BỘ ĐA THIẾT BỊ
+            </div>
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-[#166534]/15 border border-[#166534] text-[#166534] font-mono-tabular text-[10px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#166534]" />
+              ĐÃ LIÊN KẾT: h-s-m-t.vercel.app
+            </div>
           </div>
+
           <div className="space-y-3">
-            <span className="stamp-crimson text-sm font-bold">ĐỊNH DANH CÁ NHÂN</span>
+            <span className="stamp-crimson text-xs font-bold">ĐỊNH DANH CÁ NHÂN ĐỘC LẬP</span>
             <p className="font-handwriting text-xl text-[#2A2018] dark:text-[#FFD6CE] leading-snug">
-              Mỗi địa chỉ Email tương ứng với 1 Kho Lưu Trữ độc lập trên đám mây.
+              Mỗi địa chỉ Email sở hữu 1 Kho Lưu Trữ riêng biệt. Đăng nhập trên mọi thiết bị & tên miền mà không bao giờ bị ghi đè dữ liệu cũ.
             </p>
             <ul className="font-typewriter text-[11px] text-[#3A2E23] dark:text-[#FF9E8E] space-y-1.5">
+              <li>• 1 Email = 1 Tài khoản duy nhất</li>
               <li>• Tự động lưu trữ khi đăng xuất</li>
               <li>• Chống ghi đè khi đăng nhập lại</li>
-              <li>• Đăng nhập cùng tài khoản trên nhiều thiết bị</li>
+              <li>• Hoạt động trực tiếp trên https://h-s-m-t.vercel.app/</li>
             </ul>
           </div>
-          <div className="font-typewriter text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
-            CỤC LƯU TRỮ & TÌNH BÁO HỒ SƠ
+
+          <div className="p-2.5 bg-[#DFC79C]/80 dark:bg-[#240606] border border-[#6E5332] space-y-1">
+            <div className="font-stamp text-[10px] text-[#9E1B16] dark:text-[#FF6B5B]">
+              CẦU NỐI ĐÁM MÂY FIREBASE & VERCEL
+            </div>
+            <div className="font-mono-tabular text-[10px] text-[#3A2E23] dark:text-[#FF9E8E] break-all">
+              Project: gen-lang-client-0249063133
+            </div>
+            <div className="font-mono-tabular text-[10px] text-[#3A2E23] dark:text-[#FF9E8E] break-all">
+              Domain: {currentHost}
+            </div>
           </div>
         </div>
 
+        {/* Right Folder Wing: Direct Email+Password Login + Google OAuth */}
         <div
-          className={`w-1/2 manila-paper p-6 flex flex-col justify-between items-end text-right ${
+          className={`w-full md:w-7/12 manila-paper p-5 sm:p-6 flex flex-col justify-between gap-4 ${
             opening ? 'wing-right-open' : ''
           }`}
         >
-          <div className="font-stamp text-xs uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
-            XÁC THỰC TÀI KHOẢN GOOGLE
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#8C7659]/50 pb-2">
+            <div>
+              <div className="font-stamp text-xs uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
+                CỔNG XÁC THỰC HỒ SƠ MẬT
+              </div>
+              <h1 className="font-dossier text-xl sm:text-2xl font-extrabold leading-tight">
+                AETHEL BUREAU VAULT
+              </h1>
+            </div>
+
+            <div className="flex border border-[#2A2018] bg-[#EBDAB9] dark:bg-[#1E0505]">
+              <button
+                type="button"
+                onClick={() => setAuthTab('auto')}
+                className={`px-2.5 py-1 font-typewriter text-[10px] uppercase ${
+                  authTab === 'auto'
+                    ? 'bg-[#9E1B16] text-[#F5EAD2] font-bold'
+                    : 'text-[#2A2018] dark:text-[#FFD6CE]'
+                }`}
+              >
+                Đăng Nhập / Mở Kho
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthTab('register')}
+                className={`px-2.5 py-1 font-typewriter text-[10px] uppercase ${
+                  authTab === 'register'
+                    ? 'bg-[#9E1B16] text-[#F5EAD2] font-bold'
+                    : 'text-[#2A2018] dark:text-[#FFD6CE]'
+                }`}
+              >
+                Tạo Hồ Sơ Mới
+              </button>
+            </div>
           </div>
-          <div className="space-y-4">
-            <h1 className="font-dossier text-2xl sm:text-3xl font-extrabold leading-tight">
-              HỒ SƠ MẬT AETHEL BUREAU
-            </h1>
-            <p className="font-serif-editorial text-xs text-[#574A3D] dark:text-[#FF9E8E]">
-              Đăng nhập bằng Google để mở kho lưu trữ cá nhân hoặc khôi phục hồ sơ đã lưu từ các phiên trước.
-            </p>
+
+          {/* Method 1: Direct Email + Password Login (Works immediately on https://h-s-m-t.vercel.app/) */}
+          <form onSubmit={handleEmailSubmit} className="space-y-3">
+            <div className="p-3 bg-[#F5EAD2] dark:bg-[#1E0505] border-2 border-[#2A2018] dark:border-[#9E1B16] space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-stamp text-[11px] uppercase text-[#9E1B16] dark:text-[#FF6B5B]">
+                  1. ĐĂNG NHẬP TRỰC TIẾP BẰNG EMAIL (HOẠT ĐỘNG NGAY TRÊN VERCEL & MỌI THIẾT BỊ)
+                </span>
+              </div>
+
+              {authTab === 'register' && (
+                <div>
+                  <label className="block font-typewriter text-[10px] uppercase mb-1">
+                    Bí danh / Họ tên Thanh tra
+                  </label>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Ví dụ: Thanh tra Nguyễn..."
+                    className="w-full px-3 py-1.5 bg-[#FAF3E3] dark:bg-[#2B0909] border border-[#6E5332] font-typewriter text-xs focus:outline-none focus:border-[#9E1B16]"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-typewriter text-[10px] uppercase mb-1">
+                    Địa chỉ Email (1 Email = 1 Tài khoản)
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="ten-cua-ban@gmail.com"
+                    className="w-full px-3 py-1.5 bg-[#FAF3E3] dark:bg-[#2B0909] border border-[#6E5332] font-mono-tabular text-xs focus:outline-none focus:border-[#9E1B16]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-typewriter text-[10px] uppercase mb-1">
+                    Mật khẩu niêm phong (tối thiểu 4 ký tự)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3 py-1.5 bg-[#FAF3E3] dark:bg-[#2B0909] border border-[#6E5332] font-mono-tabular text-xs focus:outline-none focus:border-[#9E1B16]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <span className="font-serif-editorial text-[11px] text-[#574A3D] dark:text-[#FF9E8E]">
+                  {authTab === 'auto'
+                    ? 'Tự động khôi phục dữ liệu cũ nếu Email đã có tài khoản, hoặc tạo mới nếu lần đầu.'
+                    : 'Đăng ký kho lưu trữ độc lập cho Email này.'}
+                </span>
+                <RubberStampButton
+                  type="submit"
+                  disabled={isAuthenticating}
+                  stampWord="ĐÃ MỞ KHO"
+                >
+                  {isAuthenticating
+                    ? 'ĐANG MỞ KHO...'
+                    : authTab === 'register'
+                    ? 'TẠO TÀI KHOẢN'
+                    : 'MỞ HỒ SƠ NGAY'}
+                </RubberStampButton>
+              </div>
+            </div>
+          </form>
+
+          {/* Method 2: Google Popup OAuth + Domain Authorization Helper */}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-[#DFC79C]/65 dark:bg-[#240606] border border-[#6E5332]">
+              <div className="text-left">
+                <div className="font-stamp text-[10px] uppercase">
+                  2. HOẶC XÁC THỰC NHANH BẰNG POPUP GOOGLE
+                </div>
+                <div className="font-typewriter text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
+                  Dùng cho tên miền đã cấp phép trong Firebase Console
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isAuthenticating}
+                onClick={handleGoogleClick}
+                className="px-3 py-1.5 border-2 border-[#2A2018] bg-[#F5EAD2] dark:bg-[#1E0505] hover:bg-[#9E1B16] hover:text-white font-stamp text-xs uppercase tracking-wider transition-colors"
+              >
+                Đăng Nhập Google Popup
+              </button>
+            </div>
+
             {authError && (
-              <div className="p-2 bg-[#9E1B16]/15 border border-[#9E1B16] font-typewriter text-[11px] text-[#9E1B16] text-left">
-                {authError}
+              <div className="p-3 bg-[#9E1B16]/15 border-2 border-[#9E1B16] text-left space-y-2">
+                <div className="font-typewriter text-xs font-bold text-[#9E1B16] dark:text-[#FF6B5B]">
+                  {isUnauthorizedDomainError
+                    ? 'Tên miền hiện tại chưa được bật trong danh sách Popup Google (auth/unauthorized-domain)'
+                    : authError}
+                </div>
+
+                {isUnauthorizedDomainError && (
+                  <div className="space-y-1.5 font-typewriter text-[11px] text-[#2A2018] dark:text-[#FFD6CE]">
+                    <p>
+                      • <strong>Cách 1 (Nhanh nhất - Dùng ngay lập tức):</strong> Nhập trực tiếp{' '}
+                      <strong>Email & Mật khẩu</strong> ở khung số 1 phía trên và bấm{' '}
+                      <strong>"MỞ HỒ SƠ NGAY"</strong> (Hoạt động ngay trên{' '}
+                      <code>https://h-s-m-t.vercel.app/</code> mà không cần cấu hình thêm).
+                    </p>
+                    <p>
+                      • <strong>Cách 2 (Bật nút Popup Google cho Vercel):</strong> Mở{' '}
+                      <a
+                        href="https://console.firebase.google.com/project/gen-lang-client-0249063133/authentication/settings"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-bold text-[#9E1B16] dark:text-[#FF6B5B]"
+                      >
+                        Firebase Console → Authentication → Settings → Authorized domains
+                      </a>{' '}
+                      rồi bấm <strong>Add domain</strong> và dán tên miền sau:
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {Array.from(new Set(['h-s-m-t.vercel.app', currentHost])).map((dom) => (
+                        <button
+                          key={dom}
+                          type="button"
+                          onClick={() => copyDomainText(dom)}
+                          className="px-2 py-1 bg-[#F5EAD2] dark:bg-[#1E0505] border border-[#2A2018] font-mono-tabular text-[11px] hover:bg-[#9E1B16] hover:text-white"
+                        >
+                          {copiedDomain === dom ? `Đã chép: ${dom}` : `Sao chép: ${dom}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-            <RubberStampButton
-              disabled={isAuthenticating}
-              onClick={handleOpen}
-              stampWord="ĐANG XÁC THỰC"
-            >
-              {isAuthenticating ? 'ĐANG KẾT NỐI ĐÁM MÂY...' : 'ĐĂNG NHẬP TÀI KHOẢN GOOGLE'}
-            </RubberStampButton>
           </div>
-          <div className="font-cipher text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
-            1 EMAIL = 1 KHO LƯU TRỮ DUY NHẤT
+
+          <div className="flex items-center justify-between font-cipher text-[10px] text-[#574A3D] dark:text-[#FF9E8E]">
+            <span>1 EMAIL = 1 KHO LƯU TRỮ DUY NHẤT</span>
+            <span>CHỐNG GHI ĐÈ DỮ LIỆU</span>
           </div>
         </div>
-
-        {/* Center Red Wax Seal */}
-        {!opening && (
-          <button
-            onClick={handleOpen}
-            disabled={isAuthenticating}
-            aria-label="Đăng nhập mở niêm phong hồ sơ"
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 rounded-full bg-[#8E1B16] border-4 border-[#5C100C] text-[#F5EAD2] font-stamp text-[10px] tracking-widest uppercase shadow-[3px_5px_0px_rgba(14,9,5,0.6)] hover:scale-105 transition-transform flex items-center justify-center text-center leading-tight disabled:opacity-50"
-          >
-            {isAuthenticating ? (
-              'ĐANG MỞ...'
-            ) : (
-              <>
-                NIÊM PHONG
-                <br />
-                MẬT
-              </>
-            )}
-          </button>
-        )}
       </div>
     </div>
   );
 }
+
 
